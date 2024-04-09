@@ -1,4 +1,6 @@
 package practicari;
+//-openmode create -index índice_trec_covid -docs trec-covid  -indexingmodel bm25 1.2
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
@@ -19,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
+import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.ArrayList;
@@ -35,14 +38,27 @@ public class IndexTrecCovid {
         String indexingModel = null;
 
         for (int i = 0; i < args.length; i++) {
-            if ("-openmode".equals(args[i])) {
-                openMode = args[++i];
-            } else if ("-index".equals(args[i])) {
-                indexPath = args[++i];
-            } else if ("-docs".equals(args[i])) {
-                docsPath = args[++i];
-            } else if ("-indexingmodel".equals(args[i])) {
-                indexingModel = args[++i];
+            switch (args[i]) {
+                case "-openmode":
+                    openMode = args[++i];
+                    break;
+                case "-index":
+                    indexPath = args[++i];
+                    break;
+                case "-docs":
+                    docsPath = args[++i];
+                    break;
+                case "-indexingmodel":
+                    indexingModel = args[++i];
+                    // Asume que el siguiente argumento es el valor numérico asociado al modelo
+                    if (indexingModel.equalsIgnoreCase("jm") || indexingModel.equalsIgnoreCase("bm25")) {
+                        // Agrega espacio y el valor del siguiente argumento
+                        indexingModel += " " + args[++i];
+                    }
+                    break;
+                default:
+                    System.err.println("Opción desconocida: " + args[i]);
+                    break;
             }
         }
 
@@ -97,8 +113,15 @@ public class IndexTrecCovid {
             // Tu lógica de recuperación de información aquí...
         }
 
-        // Cerrar el indexador
-        writer.close();
+        // Cierre correcto del indexador e impresión de errores, si los hubo
+        try {
+            writer.commit();
+            writer.close();
+            dir.close();
+        } catch (IOException e) {
+            System.err.println("No se pudo cerrar el indexador o el directorio: " + e.getMessage());
+            System.exit(3);
+        }
     }
 
     private static void indexDocuments(File docsDir, IndexWriter writer) throws Exception {
@@ -113,43 +136,52 @@ public class IndexTrecCovid {
         BufferedReader br = new BufferedReader(new FileReader(file));
         String line;
         ObjectMapper mapper = new ObjectMapper();
-
-        while ((line = br.readLine()) != null) {
-            JsonNode jsonNode = mapper.readTree(line);
-
-            String id = jsonNode.get("id").asText();
-            String title = jsonNode.get("title").asText();
-            String text = jsonNode.get("text").asText();
-            String url = jsonNode.get("url").asText();
-            String pubmedId = jsonNode.get("pubmed_id").asText();
-
-            Document doc = new Document();
-            doc.add(new StringField("id", id, Field.Store.YES));
-            doc.add(new TextField("title", title, Field.Store.YES));
-            doc.add(new TextField("text", text, Field.Store.YES));
-            doc.add(new StringField("url", url, Field.Store.YES));
-            doc.add(new StringField("pubmed_id", pubmedId, Field.Store.YES));
-
-            writer.addDocument(doc);
+        try (br) {
+            while ((line = br.readLine()) != null) {
+                JsonNode jsonNode = mapper.readTree(line);
+                String id = jsonNode.hasNonNull("_id") ? jsonNode.get("_id").asText() : "";
+                String title = jsonNode.hasNonNull("title") ? jsonNode.get("title").asText() : "";
+                String text = jsonNode.hasNonNull("text") ? jsonNode.get("text").asText() : "";
+    
+                // Ahora accedemos a los campos anidados dentro de "metadata"
+                JsonNode metadataNode = jsonNode.get("metadata");
+                String url = metadataNode != null && metadataNode.hasNonNull("url") ? metadataNode.get("url").asText() : "";
+                String pubmedId = metadataNode != null && metadataNode.hasNonNull("pubmed_id") ? metadataNode.get("pubmed_id").asText() : "";
+    
+                Document doc = new Document();
+                doc.add(new StringField("id", id, Field.Store.YES));
+                doc.add(new TextField("title", title, Field.Store.YES));
+                doc.add(new TextField("text", text, Field.Store.YES));
+                doc.add(new StringField("url", url, Field.Store.YES));
+                doc.add(new StringField("pubmed_id", pubmedId, Field.Store.YES));
+                writer.addDocument(doc);
+            }
         }
-
-        br.close();
     }
     
     private static List<String> parseQueries(File queriesFile) throws Exception {
         List<String> queries = new ArrayList<>();
-        BufferedReader br = new BufferedReader(new FileReader(queriesFile));
-        String line;
         ObjectMapper mapper = new ObjectMapper();
-    
-        while ((line = br.readLine()) != null) {
-            JsonNode jsonNode = mapper.readTree(line);
-            String queryText = jsonNode.get("query").asText();
-            queries.add(queryText);
+        
+        // Use try-with-resources to ensure that the BufferedReader is closed properly
+        try (BufferedReader br = new BufferedReader(new FileReader(queriesFile))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                JsonNode jsonNode = mapper.readTree(line);
+                
+                // Accede al objeto "metadata" y luego al campo "query" dentro de él
+                JsonNode metadataNode = jsonNode.get("metadata");
+                if (metadataNode != null && metadataNode.hasNonNull("query")) {
+                    String queryText = metadataNode.get("query").asText();
+                    queries.add(queryText);
+                } else {
+                    // Log or handle the absence of the "query" field appropriately
+                    System.err.println("Warning: Entry with _id " + jsonNode.get("_id").asText() + " is missing the 'metadata.query' field.");
+                }
+            }
         }
-    
-        br.close();
         return queries;
     }
+
     
 }
