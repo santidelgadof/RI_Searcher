@@ -3,8 +3,6 @@ package practicari;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.List;
-
 public record Doc(
     @JsonProperty("_id") String id,
     String title,
