@@ -103,7 +103,7 @@ public class TrainingTestTrecCovid {
             else {
                 float k1 = 0.4F;
                 while (k1 <= 2.0) {
-                    BM25Similarity similarity = new BM25Similarity(k1, 0.75F);    // valor de b por defecto en el API
+                    BM25Similarity similarity = new BM25Similarity(k1, 0.75F);    // valor de b por defecto
 
                     k1 = k1 + 0.2F;
                 }
