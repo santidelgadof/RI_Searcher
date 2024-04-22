@@ -14,16 +14,11 @@ import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.List;
-import java.util.ArrayList;
 import java.util.ListIterator;
 
 
@@ -114,21 +109,7 @@ public class IndexTrecCovid {
                 docsPath += File.separator;
             File corpus = new File(docsPath + "corpus.jsonl");
             parseAndIndex(corpus, writer);
-            //parseAndIndexDocuments(corpus, writer);
-            //indexDocuments(docsDir, writer);
 
-            // Parsear las queries
-           /* File queriesFile = new File(docsPath, "queries.jsonl");
-            List<String> queries = parseQueries(queriesFile);
-
-            // Utilizar las queries según sea necesario
-            for (String query : queries) {
-                // Aquí puedes realizar la recuperación de información usando cada query
-                System.out.println("Query: " + query);
-                // Tu lógica de recuperación de información aquí...
-            }*/
-
-            // Cierre correcto del indexador e impresión de errores, si los hubo
             writer.commit();
             writer.close();
             dir.close();
@@ -138,17 +119,6 @@ public class IndexTrecCovid {
         }
     }
 
-    /*private static void indexDocuments(File docsDir, IndexWriter writer) {
-        for (File file : docsDir.listFiles()) {
-            if (file.getName().endsWith(".jsonl")) {
-                try {
-                    parseAndIndexDocuments(file, writer);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        }
-    }*/
 
     private static void parseAndIndex(File corpusFile, IndexWriter writer) {
         ObjectReader reader = JsonMapper.builder().findAndAddModules().build()
@@ -179,56 +149,4 @@ public class IndexTrecCovid {
 
     }
 
-    /*private static void parseAndIndexDocuments(File file, IndexWriter writer) throws Exception {
-        BufferedReader br = new BufferedReader(new FileReader(file));
-        String line;
-        ObjectMapper mapper = new ObjectMapper();
-        try (br) {
-            while ((line = br.readLine()) != null) {
-                JsonNode jsonNode = mapper.readTree(line);
-                String id = jsonNode.hasNonNull("_id") ? jsonNode.get("_id").asText() : "";
-                String title = jsonNode.hasNonNull("title") ? jsonNode.get("title").asText() : "";
-                String text = jsonNode.hasNonNull("text") ? jsonNode.get("text").asText() : "";
-    
-                // Ahora accedemos a los campos anidados dentro de "metadata"
-                JsonNode metadataNode = jsonNode.get("metadata");
-                String url = metadataNode != null && metadataNode.hasNonNull("url") ? metadataNode.get("url").asText() : "";
-                String pubmedId = metadataNode != null && metadataNode.hasNonNull("pubmed_id") ? metadataNode.get("pubmed_id").asText() : "";
-    
-                Document doc = new Document();
-                doc.add(new StringField("id", id, Field.Store.YES));
-                doc.add(new TextField("title", title, Field.Store.YES));
-                doc.add(new TextField("text", text, Field.Store.YES));
-                doc.add(new StringField("url", url, Field.Store.YES));
-                doc.add(new StringField("pubmed_id", pubmedId, Field.Store.YES));
-                writer.addDocument(doc);
-            }
-        }
-    }
-    
-    private static List<String> parseQueries(File queriesFile) throws Exception {
-        List<String> queries = new ArrayList<>();
-        ObjectMapper mapper = new ObjectMapper();
-        
-        // Use try-with-resources to ensure that the BufferedReader is closed properly
-        try (BufferedReader br = new BufferedReader(new FileReader(queriesFile))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                JsonNode jsonNode = mapper.readTree(line);
-                
-                // Accede al objeto "metadata" y luego al campo "query" dentro de él
-                JsonNode metadataNode = jsonNode.get("metadata");
-                if (metadataNode != null && metadataNode.hasNonNull("query")) {
-                    String queryText = metadataNode.get("query").asText();
-                    queries.add(queryText);
-                } else {
-                    // Log or handle the absence of the "query" field appropriately
-                    System.err.println("Warning: Entry with _id " + jsonNode.get("_id").asText() + " is missing the 'metadata.query' field.");
-                }
-            }
-        }
-        return queries;
-    }*/
-
-    
 }
