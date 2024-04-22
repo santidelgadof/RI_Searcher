@@ -1,11 +1,12 @@
 package practicari;
 
+import com.fasterxml.jackson.databind.ObjectReader;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.search.*;
@@ -15,18 +16,15 @@ import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 public class SearchEvalTrecCovid {
+    private static final String queryFilePath = "trec-covid" + File.separator + "queries.jsonl";
+    private static final String testFilePath = "trec-covid" + File.separator + "qrels" + File.separator + "test.tsv";
 
-    public static void main(String[] args) throws ParseException {
+    public static void main(String[] args) {
         // Parseo de argumentos de línea de comandos
         String searchModel = null;
         double lambda = 0.0; // Valor por defecto para JM
@@ -50,7 +48,7 @@ public class SearchEvalTrecCovid {
                     indexPath = args[++i];
                     break;
                 case "-cut":
-                    cut = Integer.parseInt(args[++i]);
+                    cut = Integer.parseInt(args[++i]);      // TODO: handle parse exceptions
                     break;
                 case "-top":
                     top = Integer.parseInt(args[++i]);
@@ -60,6 +58,7 @@ public class SearchEvalTrecCovid {
                     break;
                 default:
                     System.err.println("Opción desconocida: " + args[i]);
+                    System.exit(0);
                     break;
             }
         }
@@ -69,6 +68,8 @@ public class SearchEvalTrecCovid {
             System.err.println("Uso: java SearchEvalTrecCovid -search <jm/bm25> <lambda/k1> -index <ruta> -cut <n> -top <m> -queries <all/int1/int1-int2>");
             System.exit(1);
         }
+
+        // TODO: añadir validación de entradas (cut>0, top>0, etc)
 
         // Configurar el analizador
         Analyzer analyzer = new StandardAnalyzer();
@@ -83,15 +84,78 @@ public class SearchEvalTrecCovid {
 
         // Abrir el índice
         try (Directory dir = FSDirectory.open(Paths.get(indexPath));
-             IndexReader reader = DirectoryReader.open(dir)) {
+             IndexReader indexReader = DirectoryReader.open(dir)) {
 
             // Crear el buscador
-            IndexSearcher searcher = new IndexSearcher(reader);
+            IndexSearcher searcher = new IndexSearcher(indexReader);
             searcher.setSimilarity(similarity);
 
-            // Procesamiento de las queries
-            QueryParser queryParser = new MultiFieldQueryParser(new String[]{"text"}, analyzer);
+            File queryFile = new File(queryFilePath);
+            ObjectReader queryReader = JsonMapper.builder().findAndAddModules().build()
+                    .readerFor(QueryJsonl.class);
+            final List<QueryJsonl> queries;
+            queries = queryReader.<QueryJsonl>readValues(queryFile).readAll();
 
+            // Procesamiento de las queries
+            QueryParser queryParser = new QueryParser("text", analyzer);
+
+            // Leer el archivo de juicios de relevancia (test.tsv)
+            File testFile = new File(testFilePath);
+            Map<KeyPair, Integer> relevances = readTsv(testFile);
+
+            // Búsqueda y evaluación de las queries
+            for (QueryJsonl query : queries) {
+                Query q = queryParser.parse(query.metadata().query());
+
+                // Ranking de documentos  al hacer una búsqueda
+                TopDocs topDocs = searcher.search(q, cut);
+                List<ScoreDoc> scoreDocs = List.of(topDocs.scoreDocs);
+                List<String> topDocsIDs = new LinkedList<>();
+                int numRelevantDocsInRanking = 0;
+                int numRelevantDocsQuery = 0;
+                List<Double> rankingAccuracies = new LinkedList<>();
+
+                for(ScoreDoc scoreDoc : scoreDocs) {
+                    // buscamos cada documento de topDocs y metemos en una lista sus IDs del corpus
+                    topDocsIDs.add(searcher.doc(scoreDoc.doc).getField("id").stringValue());
+                }
+
+                for(Map.Entry<KeyPair, Integer> entry : relevances.entrySet()) {
+                    KeyPair key = entry.getKey();
+
+                    // relevancias para esta query
+                    if(key.query_id == query.id()) {
+                        Integer relevance = entry.getValue();
+                        if(relevance > 0)
+                            numRelevantDocsQuery++; // si la fila del test corresponde a esta query, guardamos nº de filas relevantes
+                        if (topDocsIDs.contains(key.corpus_id)) {
+                            if (relevance > 0) {
+                                numRelevantDocsInRanking++; // si la fila del test corresponde a esta query y el documento está en topDocs, contamos nº de filas relevantes del ranking
+                                // TODO: calcular precisiones y meterlas en rankingAccuracies
+                            }
+                        }
+                    }
+
+                }
+                double sumAccuracies = sumList(rankingAccuracies);
+
+                // Evaluación de métricas
+                float p = numRelevantDocsInRanking/cut;
+                int recall = numRelevantDocsInRanking/numRelevantDocsQuery;
+                double ap = sumAccuracies/numRelevantDocsQuery; // TODO: nº de relevantes por query se refiere a nº de relevantes en esta query??
+            }
+
+
+
+
+
+
+
+
+
+
+
+            /*
             // Búsqueda y evaluación de las queries
             try {
                 // Leer el archivo de juicios de relevancia (test.tsv)
@@ -142,24 +206,43 @@ public class SearchEvalTrecCovid {
                 }
             } catch (IOException e) {
                 System.err.println("Error al procesar las queries: " + e.getMessage());
-            }
+            } catch (ParseException e) {
+                System.err.println("Error al parsear una query: " + e.getMessage());
+            }*/
 
         } catch (IOException e) {
             System.err.println("Error al abrir el índice: " + e.getMessage());
+        } catch (ParseException e) {
+            System.err.println("Error al parsear una query: " + e.getMessage());
         }
     }
 
-    // Método para leer los juicios de relevancia del archivo test.tsv
-    private static Map<String, Integer> readRelevanceJudgments(String filePath) throws IOException {
-        Map<String, Integer> relevanceJudgments = new HashMap<>();
-        try (BufferedReader br = new BufferedReader(new FileReader(new File(filePath)))) {
+    // calcula la suma de los elementos de una lista
+    private static double sumList(List<Double> l) {
+        double acc = 0;
+        for(double elem : l)
+            acc += elem;
+        return acc;
+    }
+
+    private static Map<KeyPair, Integer> readTsv(File test) {
+        Map<KeyPair, Integer> data = new HashMap<>();
+        try (BufferedReader tsvReader = new BufferedReader(new FileReader(test))) {
             String line;
-            while ((line = br.readLine()) != null) {
-                String[] parts = line.split("\t");
-                relevanceJudgments.put(parts[0], Integer.parseInt(parts[1]));
+            while ((line = tsvReader.readLine()) != null) {
+                String[] lineItems = line.split("\t");
+                int queryId = Integer.parseInt(lineItems[0]);  // TODO: funcion parseInt
+                int relev = Integer.parseInt(lineItems[2]);
+                data.put(new KeyPair(queryId, lineItems[1]), relev);
             }
+        } catch (FileNotFoundException e) {
+            System.err.println("No se ha encontrado el archivo de tests de relevancia.");
+            System.exit(1);
+        } catch (IOException e) {
+            System.err.println("Excepción de E/S al leer el archivo de tests de relevancia: " + e.getMessage());
+            System.exit(1);
         }
-        return relevanceJudgments;
+        return data;
     }
 
     // Método para obtener las queries dependiendo de la opción seleccionada
@@ -167,5 +250,25 @@ public class SearchEvalTrecCovid {
         // Implementa la lógica para obtener las queries dependiendo de la opción seleccionada
         // Puedes leer el archivo queries.jsonl y obtener las queries
         return Arrays.asList("query1", "query2", "query3"); // Temporal, reemplaza esto con la lógica adecuada
+    }
+
+    // clase que tiene un par (query_id, corpus_id) para el hashmap de test
+    public final static class KeyPair {
+        public final int query_id;
+        public final String corpus_id;
+
+        private KeyPair(int query_id, String corpus_id) { this.query_id = query_id; this.corpus_id = corpus_id; }
+
+        public KeyPair make(int a, String b) { return new KeyPair(a, b); }
+
+        public int hashCode() {
+            return query_id + 31 * (corpus_id != null ? corpus_id.hashCode() : 0);
+        }
+
+        public boolean equals(Object o) {
+            if (o == null || o.getClass() != this.getClass()) { return false; }
+            KeyPair that = (KeyPair) o;
+            return (query_id == that.query_id) && corpus_id.equals(that.corpus_id);
+        }
     }
 }

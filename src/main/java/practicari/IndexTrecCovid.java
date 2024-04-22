@@ -127,11 +127,8 @@ public class IndexTrecCovid {
         try {
             corpusDocs = reader.<Doc>readValues(corpusFile).readAll();
 
-            ListIterator<Doc> itr = corpusDocs.listIterator();
-
             // mientras haya documentos, les sacamos las partes y las indexamos
-            while(itr.hasNext()) {
-                Doc current = itr.next();
+            for (Doc current : corpusDocs) {
                 Document doc = new Document();
 
                 doc.add(new KeywordField("id", current.id(), Field.Store.YES));
