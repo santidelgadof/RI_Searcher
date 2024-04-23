@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
-import org.apache.lucene.document.Document;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.queryparser.classic.ParseException;
@@ -101,59 +100,76 @@ public class SearchEvalTrecCovid {
 
             // Leer el archivo de juicios de relevancia (test.tsv)
             File testFile = new File(testFilePath);
-            Map<KeyPair, Integer> relevances = readTsv(testFile);
+            Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
+            int numQueries = queries.size();
+
+            double sumP = 0;
+            double sumRecall = 0;
+            double sumAP = 0;
+            double sumRR = 0;
 
             // Búsqueda y evaluación de las queries
             for (QueryJsonl query : queries) {
+                System.out.println("Query: " + query.metadata().query());
                 Query q = queryParser.parse(query.metadata().query());
+                Map<String, Integer> thisRelevances = relevances.get(query.id());
 
                 // Ranking de documentos  al hacer una búsqueda
-                TopDocs topDocs = searcher.search(q, cut);
+                TopDocs topDocs = searcher.search(q, cut);      // sacamos los n top docs para las métricas
                 List<ScoreDoc> scoreDocs = List.of(topDocs.scoreDocs);
-                List<String> topDocsIDs = new LinkedList<>();
-                int numRelevantDocsInRanking = 0;
-                int numRelevantDocsQuery = 0;
-                List<Double> rankingAccuracies = new LinkedList<>();
+                int relevantN = 0;
+                int relevantQuery = 0;
+                double sumAccuracies = 0;
+                int firstRelevant = 0;
 
-                for(ScoreDoc scoreDoc : scoreDocs) {
-                    // buscamos cada documento de topDocs y metemos en una lista sus IDs del corpus
-                    topDocsIDs.add(searcher.doc(scoreDoc.doc).getField("id").stringValue());
+                for(String corpusID : thisRelevances.keySet()) {
+                    // para cada doc, vemos si es relevante para esta query
+                    if(thisRelevances.get(corpusID) > 0)
+                        relevantQuery++;
                 }
 
-                for(Map.Entry<KeyPair, Integer> entry : relevances.entrySet()) {
-                    KeyPair key = entry.getKey();
-
-                    // relevancias para esta query
-                    if(key.query_id == query.id()) {
-                        Integer relevance = entry.getValue();
-                        if(relevance > 0)
-                            numRelevantDocsQuery++; // si la fila del test corresponde a esta query, guardamos nº de filas relevantes
-                        if (topDocsIDs.contains(key.corpus_id)) {
-                            if (relevance > 0) {
-                                numRelevantDocsInRanking++; // si la fila del test corresponde a esta query y el documento está en topDocs, contamos nº de filas relevantes del ranking
-                                // TODO: calcular precisiones y meterlas en rankingAccuracies
-                            }
+                if (relevantQuery == 0) {
+                    numQueries--;    // no tenemos en cuenta las queries sin resultados para las métricas
+                } else {
+                    int rankingPos = 0;
+                    for(ScoreDoc scoreDoc : scoreDocs) {    // n docs in topDocs
+                        // buscamos cada documento de topDocs
+                        String corpusID = searcher.doc(scoreDoc.doc).getField("id").stringValue();
+                        int relevance = thisRelevances.get(corpusID);
+                        rankingPos++;
+                        if(relevance > 0) {
+                            relevantN++;
+                            // calcular precision
+                            sumAccuracies += (double) relevantN /cut;
+                            if(firstRelevant == 0)
+                                firstRelevant = rankingPos;
                         }
                     }
 
-                }
-                double sumAccuracies = sumList(rankingAccuracies);
+                    double p = (double) relevantN / cut;
+                    double recall = relevantQuery == 0? 0 : (double) relevantN / relevantQuery;
+                    double ap = relevantQuery == 0? 0 : sumAccuracies / relevantQuery;
+                    int rr = firstRelevant == 0? 0 : 1/firstRelevant;
 
-                // Evaluación de métricas
-                float p = numRelevantDocsInRanking/cut;
-                int recall = numRelevantDocsInRanking/numRelevantDocsQuery;
-                double ap = sumAccuracies/numRelevantDocsQuery; // TODO: nº de relevantes por query se refiere a nº de relevantes en esta query??
+                    // sumar para luego calcular las métricas globales
+                    sumP += p;
+                    sumRecall += recall;
+                    sumAP += ap;
+                    sumRR += rr;
+                }
+
+
+
+                // print query metrics
+
+
+
             }
 
-
-
-
-
-
-
-
-
-
+            double mp = sumP / numQueries;
+            double meanRecall = sumRecall / numQueries;
+            double map = sumAP / numQueries;
+            double mrr = sumRR / numQueries;
 
             /*
             // Búsqueda y evaluación de las queries
@@ -206,8 +222,6 @@ public class SearchEvalTrecCovid {
                 }
             } catch (IOException e) {
                 System.err.println("Error al procesar las queries: " + e.getMessage());
-            } catch (ParseException e) {
-                System.err.println("Error al parsear una query: " + e.getMessage());
             }*/
 
         } catch (IOException e) {
@@ -217,23 +231,19 @@ public class SearchEvalTrecCovid {
         }
     }
 
-    // calcula la suma de los elementos de una lista
-    private static double sumList(List<Double> l) {
-        double acc = 0;
-        for(double elem : l)
-            acc += elem;
-        return acc;
-    }
+    private static Map<Integer, Map<String, Integer>> readTsv(File test) {
+        Map<Integer, Map<String, Integer>> data = new HashMap<>();
 
-    private static Map<KeyPair, Integer> readTsv(File test) {
-        Map<KeyPair, Integer> data = new HashMap<>();
         try (BufferedReader tsvReader = new BufferedReader(new FileReader(test))) {
             String line;
             while ((line = tsvReader.readLine()) != null) {
                 String[] lineItems = line.split("\t");
                 int queryId = Integer.parseInt(lineItems[0]);  // TODO: funcion parseInt
-                int relev = Integer.parseInt(lineItems[2]);
-                data.put(new KeyPair(queryId, lineItems[1]), relev);
+
+                Map<String, Integer> map = data.containsKey(queryId)? data.get(queryId) : new HashMap<>();
+                int relev = Integer.parseInt(lineItems[2]); // TODO parseint
+                map.put(lineItems[1], relev);
+                data.put(queryId, map);
             }
         } catch (FileNotFoundException e) {
             System.err.println("No se ha encontrado el archivo de tests de relevancia.");
@@ -252,23 +262,4 @@ public class SearchEvalTrecCovid {
         return Arrays.asList("query1", "query2", "query3"); // Temporal, reemplaza esto con la lógica adecuada
     }
 
-    // clase que tiene un par (query_id, corpus_id) para el hashmap de test
-    public final static class KeyPair {
-        public final int query_id;
-        public final String corpus_id;
-
-        private KeyPair(int query_id, String corpus_id) { this.query_id = query_id; this.corpus_id = corpus_id; }
-
-        public KeyPair make(int a, String b) { return new KeyPair(a, b); }
-
-        public int hashCode() {
-            return query_id + 31 * (corpus_id != null ? corpus_id.hashCode() : 0);
-        }
-
-        public boolean equals(Object o) {
-            if (o == null || o.getClass() != this.getClass()) { return false; }
-            KeyPair that = (KeyPair) o;
-            return (query_id == that.query_id) && corpus_id.equals(that.corpus_id);
-        }
-    }
 }
