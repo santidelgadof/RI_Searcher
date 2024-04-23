@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.document.Document;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.queryparser.classic.ParseException;
@@ -98,6 +99,11 @@ public class SearchEvalTrecCovid {
             // Procesamiento de las queries
             QueryParser queryParser = new QueryParser("text", analyzer);
 
+            // Abrimos el writer para el output
+            PrintWriter writer = new PrintWriter("TREC-COVID." + searchModel +
+                    "." + top + ".hits." + (lambda!=0? "lambda." + lambda : "k1." + k1) + ".q" +
+                    queriesOption + ".txt");
+
             // Leer el archivo de juicios de relevancia (test.tsv)
             File testFile = new File(testFilePath);
             Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
@@ -111,6 +117,8 @@ public class SearchEvalTrecCovid {
             // Búsqueda y evaluación de las queries
             for (QueryJsonl query : queries) {
                 System.out.println("Query: " + query.metadata().query());
+                writer.println("Query: " + query.metadata().query());
+                // TODO: analizar que todas las queries se hagan bien con el parser
                 Query q = queryParser.parse(query.metadata().query());
                 Map<String, Integer> thisRelevances = relevances.get(query.id());
 
@@ -128,28 +136,52 @@ public class SearchEvalTrecCovid {
                         relevantQuery++;
                 }
 
+                double p = 0;
+                double recall = 0;
+                double ap = 0;
+                int rr = 0;
+
                 if (relevantQuery == 0) {
-                    numQueries--;    // no tenemos en cuenta las queries sin resultados para las métricas
+                    numQueries--;    // no tenemos en cuenta para las métricas las queries sin resultados
+
+                    for(ScoreDoc scoreDoc : scoreDocs) {    // n docs in topDocs
+                        // buscamos cada documento de topDocs
+                        Document doc = searcher.doc(scoreDoc.doc);
+
+                        // print data for each doc:
+                        String print = getStringIndexedData(doc, scoreDoc, thisRelevances.get(doc.get("id")));
+                        System.out.print(print);
+                        writer.print(print);
+                    }
                 } else {
                     int rankingPos = 0;
                     for(ScoreDoc scoreDoc : scoreDocs) {    // n docs in topDocs
                         // buscamos cada documento de topDocs
-                        String corpusID = searcher.doc(scoreDoc.doc).getField("id").stringValue();
+                        Document doc = searcher.doc(scoreDoc.doc);
+                        String corpusID = doc.get("id");
                         int relevance = thisRelevances.get(corpusID);
                         rankingPos++;
                         if(relevance > 0) {
                             relevantN++;
                             // calcular precision
-                            sumAccuracies += (double) relevantN /cut;
+                            sumAccuracies += (double) relevantN / rankingPos;
                             if(firstRelevant == 0)
                                 firstRelevant = rankingPos;
                         }
+
+                        // print doc data:
+                        if (rankingPos < top) {
+                            String print = getStringIndexedData(doc, scoreDoc, relevance);
+                            System.out.print(print);
+                            writer.print(print);
+                        }
                     }
 
-                    double p = (double) relevantN / cut;
-                    double recall = relevantQuery == 0? 0 : (double) relevantN / relevantQuery;
-                    double ap = relevantQuery == 0? 0 : sumAccuracies / relevantQuery;
-                    int rr = firstRelevant == 0? 0 : 1/firstRelevant;
+                    // cálculo de métricas. Los denominadores nunca serán 0 por el if-else
+                    p = (double) relevantN / cut;
+                    recall = (double) relevantN / relevantQuery;
+                    ap = sumAccuracies / relevantQuery;
+                    rr = 1/firstRelevant;
 
                     // sumar para luego calcular las métricas globales
                     sumP += p;
@@ -158,77 +190,48 @@ public class SearchEvalTrecCovid {
                     sumRR += rr;
                 }
 
-
-
                 // print query metrics
-
-
-
+                System.out.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall + "; AP@n: " + ap + "; RR@n: " + rr
+                        + System.lineSeparator() + System.lineSeparator());
+                writer.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall + "; AP@n: " + ap + "; RR@n: " + rr
+                        + System.lineSeparator() + System.lineSeparator());
             }
 
+            // global metrics
             double mp = sumP / numQueries;
             double meanRecall = sumRecall / numQueries;
             double map = sumAP / numQueries;
             double mrr = sumRR / numQueries;
 
-            /*
-            // Búsqueda y evaluación de las queries
-            try {
-                // Leer el archivo de juicios de relevancia (test.tsv)
-                Map<String, Integer> relevanceJudgments = readRelevanceJudgments("test.tsv");
+            System.out.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp
+                    + "; Mean Recall@n: " + meanRecall + "; MAP@n: " + map + "; Mean RR@n: " + mrr);
+            writer.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
+                    + meanRecall + "; MAP@n: " + map + "; Mean RR@n: " + mrr);
 
-                // Procesamiento de las queries
-                for (String query : getQueries(queriesOption)) {
-                    Query q = queryParser.parse(query);
-
-                    // Búsqueda de documentos relevantes
-                    TopDocs topDocs = searcher.search(q, cut);
-
-                    // Evaluación de métricas
-                    int totalRelevant = relevanceJudgments.getOrDefault(query, 0);
-                    int retrievedRelevant = 0;
-                    double precisionSum = 0.0;
-                    double averagePrecision = 0.0;
-                    double reciprocalRank = 0.0;
-
-                    ScoreDoc[] hits = topDocs.scoreDocs;
-                    for (int i = 0; i < hits.length; i++) {
-                        Document doc = searcher.doc(hits[i].doc);
-                        int relevance = relevanceJudgments.getOrDefault(doc.get("id"), 0);
-                        if (relevance > 0) {
-                            retrievedRelevant++;
-                            precisionSum += (double) retrievedRelevant / (i + 1);
-                            averagePrecision += precisionSum / retrievedRelevant;
-                            reciprocalRank = 1.0 / (i + 1);
-                        }
-                    }
-
-                    double precisionAtN = (double) retrievedRelevant / cut;
-                    double recallAtN = (double) retrievedRelevant / totalRelevant;
-
-                    // Visualización de los resultados
-                    System.out.println("Query: " + query);
-                    // Mostrar documentos relevantes
-                    for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
-                        Document doc = searcher.doc(scoreDoc.doc);
-                        System.out.println("Doc: " + doc.get("id") + ", Score: " + scoreDoc.score);
-                        // También puedes mostrar otros campos relevantes del documento
-                    }
-                    System.out.println("Precision@N: " + precisionAtN);
-                    System.out.println("Recall@N: " + recallAtN);
-                    System.out.println("Average Precision@N: " + averagePrecision);
-                    System.out.println("Reciprocal Rank: " + reciprocalRank);
-                    System.out.println("-----------------------------");
-                }
-            } catch (IOException e) {
-                System.err.println("Error al procesar las queries: " + e.getMessage());
-            }*/
-
+            writer.flush();
+            writer.close();
         } catch (IOException e) {
             System.err.println("Error al abrir el índice: " + e.getMessage());
         } catch (ParseException e) {
             System.err.println("Error al parsear una query: " + e.getMessage());
         }
+    }
+
+    private static String getStringIndexedData(Document doc, ScoreDoc score, Integer relevance) {
+        String str = "ID: " + doc.get("id") + System.lineSeparator();
+        str += "Title: " + doc.get("title") + System.lineSeparator();
+        str += "Text: " + doc.get("text") + System.lineSeparator();
+        str += "Url: " + doc.get("url") + System.lineSeparator();
+        str += "Pubmed_id: " + doc.get("pubmed_id") + System.lineSeparator();
+        str += "Score: " + score + System.lineSeparator();
+
+        if(relevance == 0)
+            str += "Documento no relevante." + System.lineSeparator() + System.lineSeparator();
+        else if (relevance == 1)
+            str += "Documento parcialmente relevante." + System.lineSeparator() + System.lineSeparator();
+        else
+            str += "Documento relevante." + System.lineSeparator() + System.lineSeparator();
+        return str;
     }
 
     private static Map<Integer, Map<String, Integer>> readTsv(File test) {
