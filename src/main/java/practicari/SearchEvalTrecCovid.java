@@ -99,10 +99,16 @@ public class SearchEvalTrecCovid {
             // Procesamiento de las queries
             QueryParser queryParser = new QueryParser("text", analyzer);
 
-            // Abrimos el writer para el output
-            PrintWriter writer = new PrintWriter("TREC-COVID." + searchModel +
+            // Abrimos los writers
+            PrintWriter txtWriter = new PrintWriter("TREC-COVID." + searchModel +
                     "." + top + ".hits." + (lambda!=0? "lambda." + lambda : "k1." + k1) + ".q" +
                     queriesOption + ".txt");
+            PrintWriter csvWriter = new PrintWriter("TREC-COVID." + searchModel +
+                    "." + cut + ".cut." + (lambda!=0? "lambda." + lambda : "k1." + k1) + ".q" +
+                    queriesOption + ".csv");
+
+            // cabeceras del csv
+            csvWriter.println("Query,P@" + cut + ",Recall@" + cut + ",AP@" + cut + ",RR@" + cut);
 
             // Leer el archivo de juicios de relevancia (test.tsv)
             File testFile = new File(testFilePath);
@@ -117,7 +123,7 @@ public class SearchEvalTrecCovid {
             // Búsqueda y evaluación de las queries
             for (QueryJsonl query : queries) {
                 System.out.println("Query: " + query.metadata().query());
-                writer.println("Query: " + query.metadata().query());
+                txtWriter.println("Query: " + query.metadata().query());
                 // TODO: analizar que todas las queries se hagan bien con el parser
                 Query q = queryParser.parse(query.metadata().query());
                 Map<String, Integer> thisRelevances = relevances.get(query.id());
@@ -151,7 +157,7 @@ public class SearchEvalTrecCovid {
                         // print data for each doc:
                         String print = getStringIndexedData(doc, scoreDoc, thisRelevances.get(doc.get("id")));
                         System.out.print(print);
-                        writer.print(print);
+                        txtWriter.print(print);
                     }
                 } else {
                     int rankingPos = 0;
@@ -173,7 +179,7 @@ public class SearchEvalTrecCovid {
                         if (rankingPos < top) {
                             String print = getStringIndexedData(doc, scoreDoc, relevance);
                             System.out.print(print);
-                            writer.print(print);
+                            txtWriter.print(print);
                         }
                     }
 
@@ -191,10 +197,11 @@ public class SearchEvalTrecCovid {
                 }
 
                 // print query metrics
-                System.out.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall + "; AP@n: " + ap + "; RR@n: " + rr
-                        + System.lineSeparator() + System.lineSeparator());
-                writer.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall + "; AP@n: " + ap + "; RR@n: " + rr
-                        + System.lineSeparator() + System.lineSeparator());
+                System.out.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: "+ recall
+                        + "; AP@n: " + ap + "; RR@n: " + rr + System.lineSeparator() + System.lineSeparator());
+                txtWriter.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall
+                        + "; AP@n: " + ap + "; RR@n: " + rr + System.lineSeparator() + System.lineSeparator());
+                csvWriter.println(query.id() + "," + p + "," + recall + "," + ap + "," + rr);
             }
 
             // global metrics
@@ -204,12 +211,14 @@ public class SearchEvalTrecCovid {
             double mrr = sumRR / numQueries;
 
             System.out.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp
-                    + "; Mean Recall@n: " + meanRecall + "; MAP@n: " + map + "; Mean RR@n: " + mrr);
-            writer.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
-                    + meanRecall + "; MAP@n: " + map + "; Mean RR@n: " + mrr);
+                    + "; Mean Recall@n: " + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
+            txtWriter.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
+                    + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
 
-            writer.flush();
-            writer.close();
+            txtWriter.flush();
+            txtWriter.close();
+            csvWriter.flush();
+            csvWriter.close();
         } catch (IOException e) {
             System.err.println("Error al abrir el índice: " + e.getMessage());
         } catch (ParseException e) {
