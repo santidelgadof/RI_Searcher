@@ -40,19 +40,19 @@ public class SearchEvalTrecCovid {
                 case "-search":
                     searchModel = args[++i];
                     if (searchModel.equalsIgnoreCase("jm")) {
-                        lambda = Double.parseDouble(args[++i]);
+                        lambda = tryParseDouble(args[++i], "Argumento -search jm no es un número válido.");
                     } else if (searchModel.equalsIgnoreCase("bm25")) {
-                        k1 = Float.parseFloat(args[++i]);
+                        k1 = tryParseFloat(args[++i], "Argumento -search bm25 no es un número válido.");
                     }
                     break;
                 case "-index":
                     indexPath = args[++i];
                     break;
                 case "-cut":
-                    cut = Integer.parseInt(args[++i]);      // TODO: handle parse exceptions
+                    cut = tryParseInt(args[++i], "Argumento -cut no es un entero válido.");
                     break;
                 case "-top":
-                    top = Integer.parseInt(args[++i]);
+                    top = tryParseInt(args[++i], "Argumento -top no es un entero válido.");
                     break;
                 case "-queries":
                     queriesOption = args[++i];
@@ -66,11 +66,17 @@ public class SearchEvalTrecCovid {
 
         // Validar argumentos
         if (searchModel == null || indexPath == null || queriesOption == null) {
-            System.err.println("Uso: java SearchEvalTrecCovid -search <jm/bm25> <lambda/k1> -index <ruta> -cut <n> -top <m> -queries <all/int1/int1-int2>");
+            System.err.println("Uso: java SearchEvalTrecCovid -search <jm/bm25> <lambda/k1>" +
+                    "-index <ruta> -cut <n> -top <m> -queries <all/int1/int1-int2>");
             System.exit(1);
         }
-
-        // TODO: añadir validación de entradas (cut>0, top>0, etc)
+        if (cut < 1) {
+            System.err.println("Opción -cut debe ser un entero positivo.");
+            System.exit(1);
+        } else if (top < 1) {
+            System.err.println("Opción -top debe ser un entero positivo.");
+            System.exit(1);
+        }
 
         // Configurar el analizador
         Analyzer analyzer = new StandardAnalyzer();
@@ -100,8 +106,8 @@ public class SearchEvalTrecCovid {
                 queries = itr.readAll();
             else if (queriesOption.contains("-")) {      // si es un rango de queries
                 String[] parts = queriesOption.split("-");
-                int q1 = Integer.parseInt(parts[0]);
-                int q2 = Integer.parseInt(parts[1]);
+                int q1 = tryParseInt(parts[0], "Argumento -queries no válido.");
+                int q2 = tryParseInt(parts[1], "Argumento -queries no válido.");
                 QueryJsonl query;
 
                 while (itr.hasNext()) {
@@ -110,7 +116,7 @@ public class SearchEvalTrecCovid {
                         queries.add(query);
                 }
             } else {        // si es una única query
-                int q = Integer.parseInt(queriesOption);
+                int q = tryParseInt(queriesOption, "Argumento -queries no válido.");
                 QueryJsonl query;
 
                 while (itr.hasNext()) {
@@ -161,7 +167,8 @@ public class SearchEvalTrecCovid {
                 Map<String, Integer> thisRelevances = relevances.get(query.id());
 
                 // Ranking de documentos  al hacer una búsqueda
-                TopDocs topDocs = searcher.search(q, cut);      // sacamos los n top docs para las métricas
+                int numDocsinRanking = Math.max(cut, top);
+                TopDocs topDocs = searcher.search(q, numDocsinRanking); // sacamos los top docs para las métricas y el output
                 List<ScoreDoc> scoreDocs = List.of(topDocs.scoreDocs);
                 int relevantN = 0;
                 int relevantQuery = 0;
@@ -182,33 +189,41 @@ public class SearchEvalTrecCovid {
                 if (relevantQuery == 0) {
                     numQueries--;    // no tenemos en cuenta para las métricas las queries sin resultados
 
+                    int rankingPos = 0;
                     for(ScoreDoc scoreDoc : scoreDocs) {    // n docs in topDocs
-                        // buscamos cada documento de topDocs
-                        Document doc = searcher.doc(scoreDoc.doc);
+                        rankingPos++;
 
-                        // print data for each doc:
+                        if (rankingPos > top)
+                            break;
+
+                        // buscamos cada documento de los primeros m topDocs e imprimimos su info
+                        Document doc = searcher.doc(scoreDoc.doc);
                         String print = getStringIndexedData(doc, scoreDoc, thisRelevances.get(doc.get("id")));
                         System.out.print(print);
                         txtWriter.print(print);
                     }
                 } else {
                     int rankingPos = 0;
-                    for(ScoreDoc scoreDoc : scoreDocs) {    // n docs in topDocs
+                    for(ScoreDoc scoreDoc : scoreDocs) {        // iteramos por el ranking
+                        rankingPos++;
+
                         // buscamos cada documento de topDocs
                         Document doc = searcher.doc(scoreDoc.doc);
                         String corpusID = doc.get("id");
                         int relevance = thisRelevances.get(corpusID);
-                        rankingPos++;
-                        if(relevance > 0) {
-                            relevantN++;
-                            // calcular precision
-                            sumAccuracies += (double) relevantN / rankingPos;
-                            if(firstRelevant == 0)
-                                firstRelevant = rankingPos;
+
+                        if (rankingPos <= cut) {        // si estamos en el corte n calculammos las métricas
+                            if(relevance > 0) {
+                                relevantN++;
+                                // calcular precision
+                                sumAccuracies += (double) relevantN / rankingPos;
+                                if(firstRelevant == 0)
+                                    firstRelevant = rankingPos;
+                            }
                         }
 
-                        // print doc data:
-                        if (rankingPos < top) {
+                        // print m times doc data:
+                        if (rankingPos <= top) {
                             String print = getStringIndexedData(doc, scoreDoc, relevance);
                             System.out.print(print);
                             txtWriter.print(print);
@@ -247,6 +262,7 @@ public class SearchEvalTrecCovid {
             txtWriter.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
                     + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
 
+            // cerrar writers
             txtWriter.flush();
             txtWriter.close();
             csvWriter.flush();
@@ -264,7 +280,7 @@ public class SearchEvalTrecCovid {
         str += "Text: " + doc.get("text") + System.lineSeparator();
         str += "Url: " + doc.get("url") + System.lineSeparator();
         str += "Pubmed_id: " + doc.get("pubmed_id") + System.lineSeparator();
-        str += "Score: " + score + System.lineSeparator();
+        str += "Score: " + score.score + System.lineSeparator();
 
         if(relevance == 0)
             str += "Documento no relevante." + System.lineSeparator() + System.lineSeparator();
@@ -279,13 +295,13 @@ public class SearchEvalTrecCovid {
         Map<Integer, Map<String, Integer>> data = new HashMap<>();
 
         try (BufferedReader tsvReader = new BufferedReader(new FileReader(test))) {
-            String line;
+            String line = tsvReader.readLine();      // ignoramos la línea de cabecera
             while ((line = tsvReader.readLine()) != null) {
                 String[] lineItems = line.split("\t");
-                int queryId = Integer.parseInt(lineItems[0]);  // TODO: funcion parseInt
+                int queryId = tryParseInt(lineItems[0], "Error en el archivo de tests de relevancia.");
 
                 Map<String, Integer> map = data.containsKey(queryId)? data.get(queryId) : new HashMap<>();
-                int relev = Integer.parseInt(lineItems[2]); // TODO parseint
+                int relev = tryParseInt(lineItems[2], "Error en el archivo de tests de relevancia.");
                 map.put(lineItems[1], relev);
                 data.put(queryId, map);
             }
@@ -299,11 +315,31 @@ public class SearchEvalTrecCovid {
         return data;
     }
 
-    // Método para obtener las queries dependiendo de la opción seleccionada
-    private static Iterable<String> getQueries(String queriesOption) {
-        // Implementa la lógica para obtener las queries dependiendo de la opción seleccionada
-        // Puedes leer el archivo queries.jsonl y obtener las queries
-        return Arrays.asList("query1", "query2", "query3"); // Temporal, reemplaza esto con la lógica adecuada
+    private static double tryParseDouble(String n, String errMsg) {
+        try {
+            return Double.parseDouble(n);
+        } catch (NumberFormatException e) {
+            System.err.println("Error de parsing: " + errMsg);
+            System.exit(1);
+        }
+        return 0;
     }
-
+    private static float tryParseFloat(String n, String errMsg) {
+        try {
+            return Float.parseFloat(n);
+        } catch (NumberFormatException e) {
+            System.err.println("Error de parsing: " + errMsg);
+            System.exit(1);
+        }
+        return 0;
+    }
+    private static int tryParseInt(String n, String errMsg) {
+        try {
+            return Integer.parseInt(n);
+        } catch (NumberFormatException e) {
+            System.err.println("Error de parsing: " + errMsg);
+            System.exit(1);
+        }
+        return 0;
+    }
 }
