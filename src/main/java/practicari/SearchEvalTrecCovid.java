@@ -1,5 +1,6 @@
 package practicari;
 
+import com.fasterxml.jackson.databind.MappingIterator;
 import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.apache.lucene.analysis.Analyzer;
@@ -93,8 +94,39 @@ public class SearchEvalTrecCovid {
             File queryFile = new File(queryFilePath);
             ObjectReader queryReader = JsonMapper.builder().findAndAddModules().build()
                     .readerFor(QueryJsonl.class);
-            final List<QueryJsonl> queries;
-            queries = queryReader.<QueryJsonl>readValues(queryFile).readAll();
+            List<QueryJsonl> queries = new LinkedList<>();
+            MappingIterator<QueryJsonl> itr = queryReader.readValues(queryFile);
+            if(queriesOption.equals("all"))     // si hay que leer todas las queries
+                queries = itr.readAll();
+            else if (queriesOption.contains("-")) {      // si es un rango de queries
+                String[] parts = queriesOption.split("-");
+                int q1 = Integer.parseInt(parts[0]);
+                int q2 = Integer.parseInt(parts[1]);
+                QueryJsonl query;
+
+                while (itr.hasNext()) {
+                    query = itr.next();
+                    if (query.id() > q1 && query.id() < q2)
+                        queries.add(query);
+                }
+            } else {        // si es una única query
+                int q = Integer.parseInt(queriesOption);
+                QueryJsonl query;
+
+                while (itr.hasNext()) {
+                    query = itr.next();
+                    if (query.id()  == q) {
+                        queries.add(query);
+                        break;
+                    }
+                }
+
+                if(queries.isEmpty()) {
+                    System.out.println("La query especificada no existe.");
+                    System.exit(1);
+                }
+            }
+
 
             // Procesamiento de las queries
             QueryParser queryParser = new QueryParser("text", analyzer);
@@ -220,9 +252,9 @@ public class SearchEvalTrecCovid {
             csvWriter.flush();
             csvWriter.close();
         } catch (IOException e) {
-            System.err.println("Error al abrir el índice: " + e.getMessage());
+            System.err.println("Excepción de E/S: " + e.getMessage());
         } catch (ParseException e) {
-            System.err.println("Error al parsear una query: " + e.getMessage());
+            System.err.println("Error de parsing: " + e.getMessage());
         }
     }
 
