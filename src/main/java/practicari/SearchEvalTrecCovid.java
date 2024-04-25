@@ -210,7 +210,7 @@ public class SearchEvalTrecCovid {
                         // buscamos cada documento de topDocs
                         Document doc = searcher.doc(scoreDoc.doc);
                         String corpusID = doc.get("id");
-                        int relevance = thisRelevances.get(corpusID);
+                        int relevance = thisRelevances.getOrDefault(corpusID, 0);
 
                         if (rankingPos <= cut) {        // si estamos en el corte n calculammos las métricas
                             if(relevance > 0) {
@@ -230,11 +230,11 @@ public class SearchEvalTrecCovid {
                         }
                     }
 
-                    // cálculo de métricas. Los denominadores nunca serán 0 por el if-else
+                    // cálculo de métricas
                     p = (double) relevantN / cut;
                     recall = (double) relevantN / relevantQuery;
                     ap = sumAccuracies / relevantQuery;
-                    rr = 1/firstRelevant;
+                    rr = firstRelevant == 0? 0 : 1/firstRelevant;
 
                     // sumar para luego calcular las métricas globales
                     sumP += p;
