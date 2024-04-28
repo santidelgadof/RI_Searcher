@@ -1,5 +1,6 @@
 package practicari;
 
+//-evaljm 1-20 21-30 -cut 10 -metrica P -index índice_trec_covid/
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.index.DirectoryReader;
@@ -37,7 +38,6 @@ public class TrainingTestTrecCovid {
     public static void main(String[] args) {
         
         boolean evaljm = false, evalbm25 = false;
-        List<Integer> rango;
         int cut = 0;
         String evalOption = null;
         String indexDir = null;
@@ -46,44 +46,36 @@ public class TrainingTestTrecCovid {
         String metric = null;
 
         for (int i = 0; i < args.length; i++) {
-            System.out.println("Argumento actual: " + args[i]); // Agregar esta línea para depurar
+            System.out.println("Argumento actual: " + args[i]); 
             switch(args[i]) {
-                case "evaljm":
+                case "-evaljm":
                     evalOption = "-evaljm";
                     evaljm = true;
-                    rango = parseRange(args[i], args[i++]);
+                    evalOption = args[i];
                     String[] evalArgsJM = args[++i].split("-");
-                    if (evalArgsJM.length != 4) {
-                        System.out.println("Argumentos incorrectos para -evaljm");
-                        System.exit(0);
-                    }
                     trainingQueries[0] = Integer.parseInt(evalArgsJM[0]);
                     trainingQueries[1] = Integer.parseInt(evalArgsJM[1]);
-                    testQueries[0] = Integer.parseInt(evalArgsJM[2]);
-                    testQueries[1] = Integer.parseInt(evalArgsJM[3]);
+                    evalArgsJM = args[++i].split("-");
+                    testQueries[0] = Integer.parseInt(evalArgsJM[0]);
+                    testQueries[1] = Integer.parseInt(evalArgsJM[1]);
                     break;
-                case "evalbm25":
+                case "-evalbm25":
                     evalOption = "-evalbm25";
                     evalbm25 = true;
-                    rango = parseRange(args[i], args[i++]);
                     String[] evalArgsBM25 = args[++i].split("-");
-                    if (evalArgsBM25.length != 4) {
-                        System.out.println("Argumentos incorrectos para -evalbm25");
-                        System.exit(0);
-                    }
                     trainingQueries[0] = Integer.parseInt(evalArgsBM25[0]);
                     trainingQueries[1] = Integer.parseInt(evalArgsBM25[1]);
                     testQueries[0] = Integer.parseInt(evalArgsBM25[2]);
                     testQueries[1] = Integer.parseInt(evalArgsBM25[3]);
                     break;
-                case "cut":
+                case "-cut":
                     cut = tryParse(args[++i], "Parámetro \"cut\" no es un entero válido");  
                     break;
                 case "-metrica":
-                    metric = args[i++];
+                    metric = args[++i];
                     break;
                 case "-index":
-                    indexDir = args[i++];
+                    indexDir = args[++i];
                     break;
                 default:
                     System.out.println("Argumento incorrecto: " + args[i]);
@@ -103,7 +95,7 @@ public class TrainingTestTrecCovid {
         // Configurar el analizador
         Analyzer analyzer = new StandardAnalyzer();
 
-                // Abrir el índice
+        // Abrir el índice
         try (Directory dir = FSDirectory.open(Paths.get(indexDir));
             IndexReader indexReader = DirectoryReader.open(dir)) {
 
@@ -116,39 +108,6 @@ public class TrainingTestTrecCovid {
             } else if (evalOption.equals("-evalbm25")) {
                 evaluateAndOptimizeBM25Model(searcher, analyzer, trainingQueries, testQueries, cut, metric);
             }
-
-        // try {
-        //     indexDir = FSDirectory.open(indexPath);
-        //     indexReader = DirectoryReader.open(indexDir);
-        //     StoredFields storedFields = indexReader.storedFields();
-        //     IndexSearcher searcher = new IndexSearcher(indexReader);
-        //     QueryParser parser = new QueryParser("", new StandardAnalyzer());
-
-
-            // if(evaljm) {
-            //     float lambda = 0.001F;
-            //     while (lambda <= 1.0F) {
-            //         LMJelinekMercerSimilarity similarity = new LMJelinekMercerSimilarity(0.001F);
-
-            //         // lanzar queries
-
-            //         if (lambda == 0.001F){
-            //             lambda = 0.1F;
-            //         } else {
-            //             lambda = lambda + 0.1F;
-            //         }
-            //     }
-
-            // }
-            // else {
-            //     float k1 = 0.4F;
-            //     while (k1 <= 2.0) {
-            //         BM25Similarity similarity = new BM25Similarity(k1, 0.75F);    // valor de b por defecto
-
-            //         k1 = k1 + 0.2F;
-            //     }
-
-            // }
 
         } catch (IOException | ParseException e) {
             throw new RuntimeException(e);
@@ -173,36 +132,51 @@ public class TrainingTestTrecCovid {
             System.out.println("El argumento \"index\" es obligatorio.\n");
             System.exit(0);
         } else if (!metrica.equals("P") && !metrica.equals("R") && !metrica.equals("MRR") && !metrica.equals("MAP")) {
-            System.out.println("El argumento \"metrica\" no tiene un valor válido.\n");
-            System.exit(0);
+             System.out.println("El argumento \"metrica\" no tiene un valor válido.\n");
+             System.exit(0);
         }
     }
     
-    private static void evaluateAndOptimizeJMModel(IndexSearcher searcher, Analyzer analyzer,int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
-        double[] lambdas = {0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
-        double bestLambda = 0.0;
+    private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric, double[] paramValues, String similarityType) throws IOException, ParseException {
+        double bestParamValue = 0.0;
         double bestScore = Double.MIN_VALUE;
-
-        File trainingCsvFile = new File("TREC-COVID.jm.training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
+        double totalScore = 0.0;
+        int totalQueries = 0;
+    
+        // Crear archivos CSV para entrenamiento y test
+        File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
+        File testCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".test.csv");
+    
+        // FileWriter para archivos CSV de entrenamiento y test
         FileWriter trainingWriter = new FileWriter(trainingCsvFile);
-
+        FileWriter testWriter = new FileWriter(testCsvFile);
+    
+        // Escribir encabezados en archivos CSV de entrenamiento y test
         trainingWriter.write("Query,");
-        for (double lambda : lambdas) {
-            trainingWriter.write(lambda + ",");
+        testWriter.write("Query,");
+        for (double param : paramValues) {
+            trainingWriter.write(param + ",");
         }
         trainingWriter.write("\n");
-
+        testWriter.write(metric + ",\n");
+    
+        // Procesar cada consulta de entrenamiento
         for (int i = trainingQueries[0]; i <= trainingQueries[1]; i++) {
             org.apache.lucene.search.Query query = buildQuery(i, analyzer);
             trainingWriter.write(i + ",");
-            double[] scores = new double[lambdas.length];
-            for (int j = 0; j < lambdas.length; j++) {
-                searcher.setSimilarity(new LMJelinekMercerSimilarity((float) lambdas[j]));
+            double[] scores = new double[paramValues.length];
+            for (int j = 0; j < paramValues.length; j++) {
+                if (similarityType.equals("JM")) {
+                    searcher.setSimilarity(new LMJelinekMercerSimilarity((float) paramValues[j]));
+                } else if (similarityType.equals("BM25")) {
+                    BM25Similarity similarity = new BM25Similarity((float) paramValues[j], 0.75F);
+                    searcher.setSimilarity(similarity);
+                }
                 double score = evaluateQuery(searcher, query, cut, metric);
                 scores[j] = score;
                 if (score > bestScore) {
                     bestScore = score;
-                    bestLambda = lambdas[j];
+                    bestParamValue = paramValues[j];
                 }
             }
             Arrays.stream(scores).forEach(score -> {
@@ -214,18 +188,44 @@ public class TrainingTestTrecCovid {
             });
             trainingWriter.write("\n");
         }
-        System.out.println("Best Lambda: " + bestLambda);
-
-        // Use the best lambda on test queries
-        evaluateTestQueries(searcher, analyzer, trainingQueries, bestLambda, testQueries, cut, metric);
+    
+        // Procesar cada consulta de test
+        for (int i = testQueries[0]; i <= testQueries[1]; i++) {
+            org.apache.lucene.search.Query query = buildQuery(i, analyzer);
+            double score = evaluateQuery(searcher, query, cut, metric);
+            testWriter.write(i + ", " + score + "\n");
+            totalScore += score;
+            totalQueries++;
+        }
+    
+        // Escribir promedio en archivo CSV de test
+        double averageScore = totalScore / totalQueries;
+        testWriter.write("Average, " + averageScore + "\n");
+    
+        // Cerrar FileWriter
         trainingWriter.close();
+        testWriter.close();
+    
+        // Imprimir resultados en pantalla
+        printResults(trainingCsvFile);
+        printResults(testCsvFile);
+    
+        System.out.println("Best " + similarityType + " Value: " + bestParamValue);
+    }
+    
+    private static void evaluateAndOptimizeJMModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
+        double[] lambdas = {0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
+        evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, lambdas, "JM");
+    }
+    
+    private static void evaluateAndOptimizeBM25Model(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
+        double[] k1Values = {0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0};
+        evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, k1Values, "BM25");    
     }
 
     private static org.apache.lucene.search.Query buildQuery(int queryId, Analyzer analyzer) throws ParseException {
-        // Construir una cadena de consulta basada en el ID de la consulta
-        String queryString = "your query string here";
-        
-        // Utilizar el QueryParser para analizar la cadena de consulta y obtener la consulta
+        // Aquí construyes la cadena de consulta basada en el ID de la consulta real
+        String queryString = "consulta_real_basada_en_el_id";
         QueryParser parser = new QueryParser("fieldName", analyzer);
         return parser.parse(queryString);
     }
@@ -240,79 +240,6 @@ public class TrainingTestTrecCovid {
         // Calcular la métrica de evaluación (por ejemplo, precisión P@k)
         double precision = calculatePrecision(hits, cut);
         return precision;
-    }
-
-
-    private static void evaluateTestQueries(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, double bestLambda, int[] testQueries, int cut, String metric) throws IOException, ParseException {
-        File testCsvFile = new File("TREC-COVID.jm.training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".test.csv");
-        FileWriter testWriter = new FileWriter(testCsvFile);
-    
-        // Write header for test CSV file
-        testWriter.write("Query, " + metric + "\n");
-    
-        double totalScore = 0.0;
-        int totalQueries = 0;
-    
-        for (int i = testQueries[0]; i <= testQueries[1]; i++) {
-            org.apache.lucene.search.Query query = buildQuery(i, analyzer);
-            double score = evaluateQuery(searcher, query, cut, metric);
-            testWriter.write(i + ", " + score + "\n");
-            totalScore += score;
-            totalQueries++;
-        }
-    
-        double averageScore = totalScore / totalQueries;
-        testWriter.write("Average, " + averageScore + "\n");
-    
-        // Print the results to the console
-        System.out.println("Results for test queries:");
-        // Leer el archivo CSV y mostrar los resultados en la consola
-    
-        testWriter.close();
-    }
-
-    private static void evaluateAndOptimizeBM25Model(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
-        double[] k1Values = {0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0};
-        double bestK1 = 0.0;
-        double bestScore = Double.MIN_VALUE;
-
-        File trainingCsvFile = new File("TREC-COVID.bm25.training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
-        FileWriter trainingWriter = new FileWriter(trainingCsvFile);
-
-        trainingWriter.write("Query,");
-        for (double k1 : k1Values) {
-            trainingWriter.write(k1 + ",");
-        }
-        trainingWriter.write("\n");
-
-        for (int i = trainingQueries[0]; i <= trainingQueries[1]; i++) {
-            org.apache.lucene.search.Query query = buildQuery(i, analyzer);
-            trainingWriter.write(i + ",");
-            double[] scores = new double[k1Values.length];
-            for (int j = 0; j < k1Values.length; j++) {
-                BM25Similarity similarity = new BM25Similarity((float) k1Values[j], 0.75F);
-                searcher.setSimilarity(similarity);
-                double score = evaluateQuery(searcher, query, cut, metric);
-                scores[j] = score;
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestK1 = k1Values[j];
-                }
-            }
-            Arrays.stream(scores).forEach(score -> {
-                try {
-                    trainingWriter.write(score + ",");
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            });
-            trainingWriter.write("\n");
-        }
-        System.out.println("Best k1 Value: " + bestK1);
-
-        // Use the best k1 value on test queries
-        evaluateTestQueries(searcher, analyzer, trainingQueries, bestK1, testQueries, cut, metric);
-        trainingWriter.close();
     }
 
     
@@ -346,8 +273,7 @@ public class TrainingTestTrecCovid {
     private static double calculatePrecision(ScoreDoc[] hits, int cut) {
         int relevantCount = 0;
         for (int i = 0; i < Math.min(hits.length, cut); i++) {
-            // Aquí determina si el documento en la posición i es relevante
-            // Puedes ajustar esta lógica según tu caso de uso específico
+            // Determina si el documento en la posición i es relevante
             if (isRelevantDocument(hits[i], null)) {
                 relevantCount++;
             }
@@ -363,4 +289,69 @@ public class TrainingTestTrecCovid {
         return relevantDocumentIds.contains(docId);
     }
     
+    private static void printResults(File file) throws IOException {
+        System.out.println("Results for " + file.getName() + ":");
+        List<String> lines = Files.readAllLines(file.toPath());
+        for (String line : lines) {
+            System.out.println(line);
+        }
+    }
+
+        // private static void createTrainingCSVFile(String model, int[] trainingQueries, int[] testQueries, String metric, int cut, double[] paramValues, double[] scores) {
+    //     String fileName = "TREC-COVID." + model.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv";
+    //     try (FileWriter writer = new FileWriter(fileName)) {
+    //         // Escribir encabezado
+    //         writer.write("Query,");
+    //         for (double param : paramValues) {
+    //             writer.write(param + ",");
+    //         }
+    //         writer.write("\n");
+    //         // Escribir resultados por consulta
+    //         for (int i = 0; i < trainingQueries[1] - trainingQueries[0] + 1; i++) {
+    //             writer.write((i + trainingQueries[0]) + ",");
+    //             for (double score : scores) {
+    //                 writer.write(score + ",");
+    //             }
+    //             writer.write("\n");
+    //         }
+    //         // Escribir fila de promedios
+    //         writer.write("Average,");
+    //         double total = 0;
+    //         for (double score : scores) {
+    //             total += score;
+    //         }
+    //         double average = total / scores.length;
+    //         for (int i = 0; i < paramValues.length; i++) {
+    //             writer.write(average + ",");
+    //         }
+
+    //         // Imprimir resultados por pantalla
+    //         printResults(new File(fileName));
+
+    //     } catch (IOException e) {
+    //         e.printStackTrace();
+    //     }
+        
+    // }
+    
+    // private static void createTestCSVFile(String model, int[] trainingQueries, int[] testQueries, String metric, double bestParamValue, double averageScore) {
+    //     String fileName = "TREC-COVID." + model.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + ".test.csv";
+    //     try (FileWriter writer = new FileWriter(fileName)) {
+    //         // Escribir encabezado
+    //         writer.write("Query,");
+    //         writer.write(metric + ",\n");
+    //         // Escribir resultados por consulta
+    //         for (int i = testQueries[0]; i <= testQueries[1]; i++) {
+    //             writer.write(i + ", " + averageScore + "\n");
+    //         }
+    //         // Imprimir resultados por pantalla
+    //         printResults(new File(fileName));
+            
+    //         // Escribir fila de promedio
+    //         writer.write("Average, " + averageScore + "\n");
+    //     } catch (IOException e) {
+    //         e.printStackTrace();
+    //     }
+        
+    // }
 }
