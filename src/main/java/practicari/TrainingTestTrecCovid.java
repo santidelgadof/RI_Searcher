@@ -262,7 +262,7 @@ public class TrainingTestTrecCovid {
     }
     
     private static double calculatePrecision(IndexSearcher searcher, Query query, ScoreDoc[] hits) throws IOException {
-        List<String> relevantDocs = getRelevantDocuments(query); // Obtener los documentos relevantes para la consulta actual
+        Map<String, Integer> relevantDocs = getRelevantDocuments(query, ); // Obtener los documentos relevantes para la consulta actual
         int relevantCount = relevantDocs.size();
         if (relevantCount == 0) return 0.0;
         
@@ -272,7 +272,7 @@ public class TrainingTestTrecCovid {
             @SuppressWarnings("deprecation")
             Document doc = searcher.doc(hits[i].doc);
             String docId = doc.get("id");
-            if (relevantDocs.contains(docId)) {
+            if (relevantDocs.containsKey(docId)) {
                 relevantRetrieved++;
             }
         }
@@ -280,16 +280,16 @@ public class TrainingTestTrecCovid {
     }
     
     
-    private static List<String> getRelevantDocuments(Query query) throws IOException {
+    private static Map<String, Integer> getRelevantDocuments(Query query, int queryId) throws IOException {
         File testFile = new File(testFilePath);
         Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
         
-        
         // Suponiendo que queryText es el texto de la consulta, podemos buscar en el mapa de documentos relevantes utilizando este texto como clave
-        List<String> relevantDocuments = relevances.getOrDefault(queryId, new ArrayList<>());
-        System.out.println("Documentos relevantes: " + relevantDocuments);
+        Map<String, Integer> relevantDocuments = relevances.getOrDefault(queryId, new HashMap<>());
+        System.out.println("Documentos relevantes para la consulta " + queryId + ": " + relevantDocuments);
         return relevantDocuments;
     }
+    
     
     private static void printResults(File file) throws IOException {
         System.out.println("Results for " + file.getName() + ":");
