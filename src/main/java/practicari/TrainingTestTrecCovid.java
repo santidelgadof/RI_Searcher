@@ -12,23 +12,37 @@ import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.LineNumberReader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
+import org.apache.lucene.document.Document;
 
 import java.nio.file.Files;
+import org.apache.lucene.search.Query;
 
 public class TrainingTestTrecCovid {
     // TODO: tener en cuenta queries con AND y OR
+    private static final String queryFilePath = "trec-covid" + File.separator + "queries.jsonl";
+    private static final String testFilePath = "trec-covid" + File.separator + "qrels" + File.separator + "test.tsv";
     private static final String usage = "Uso:\n" +
             "-evaljm <int1-int2> <int3-int4>\n" +
             "-evalbm25 <int1-int2> <int3-int4> (las opciones -evaljm -evalbm25 son mutuamente excluyentes)\n" +
@@ -136,13 +150,27 @@ public class TrainingTestTrecCovid {
              System.exit(0);
         }
     }
+    //JM model
+    private static void evaluateAndOptimizeJMModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
+        double[] lambdas = {0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
+        evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, lambdas, "JM");
+    }
     
+    //BM25 model
+    private static void evaluateAndOptimizeBM25Model(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
+        double[] k1Values = {0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0};
+        evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, k1Values, "BM25");    
+    }
+
     // Evalúa y optimiza un modelo de recuperación de información .
     private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric, double[] paramValues, String similarityType) throws IOException, ParseException {
         double bestParamValue = 0.0;
         double bestScore = Double.MIN_VALUE;
         double totalScore = 0.0;
         int totalQueries = 0;
+        QueryParser parser = new QueryParser("Contents", new StandardAnalyzer());
+        Query[] trainingqueries = parseQuery(parser, trainingQueries[0], trainingQueries[1]);
+        Query[] testqueries = parseQuery(parser, testQueries[0], testQueries[1]);
     
         // Crear archivos CSV para entrenamiento y test
         File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
@@ -163,7 +191,7 @@ public class TrainingTestTrecCovid {
     
         // Procesar cada consulta de entrenamiento
         for (int i = trainingQueries[0]; i <= trainingQueries[1]; i++) {
-            org.apache.lucene.search.Query query = buildQuery(i, analyzer);
+            Query query = trainingqueries[i - trainingQueries[0]]; // Obtener la consulta correspondiente
             trainingWriter.write(i + ",");
             double[] scores = new double[paramValues.length];
             for (int j = 0; j < paramValues.length; j++) {
@@ -173,7 +201,7 @@ public class TrainingTestTrecCovid {
                     BM25Similarity similarity = new BM25Similarity((float) paramValues[j], 0.75F);
                     searcher.setSimilarity(similarity);
                 }
-                double score = evaluateQuery(searcher, query, cut, metric);
+                double score = evaluateQuery(searcher, query, cut, metric); // Pasar la consulta correcta
                 scores[j] = score;
                 if (score > bestScore) {
                     bestScore = score;
@@ -192,8 +220,8 @@ public class TrainingTestTrecCovid {
     
         // Procesar cada consulta de test
         for (int i = testQueries[0]; i <= testQueries[1]; i++) {
-            org.apache.lucene.search.Query query = buildQuery(i, analyzer);
-            double score = evaluateQuery(searcher, query, cut, metric);
+            Query query = testqueries[i - testQueries[0]]; // Obtener la consulta correspondiente
+            double score = evaluateQuery(searcher, query, cut, metric); // Pasar la consulta correcta
             testWriter.write(i + ", " + score + "\n");
             totalScore += score;
             totalQueries++;
@@ -214,38 +242,91 @@ public class TrainingTestTrecCovid {
         System.out.println("Best " + similarityType + " Value: " + bestParamValue);
     }
     
-    //JM model
-    private static void evaluateAndOptimizeJMModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
-        double[] lambdas = {0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
-        evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, lambdas, "JM");
-    }
-    
-    //BM25 model
-    private static void evaluateAndOptimizeBM25Model(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
-        double[] k1Values = {0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0};
-        evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, k1Values, "BM25");    
-    }
-
-    private static org.apache.lucene.search.Query buildQuery(int queryId, Analyzer analyzer) throws ParseException {
-        // Aquí construyes la cadena de consulta basada en el ID de la consulta real
-        String queryString = "consulta_real_basada_en_el_id";
-        QueryParser parser = new QueryParser("fieldName", analyzer);
-        return parser.parse(queryString);
-    }
-    
-
-    private static double evaluateQuery(IndexSearcher searcher, org.apache.lucene.search.Query query, int cut, String metric) throws IOException {
-        // Realizar la búsqueda utilizando la consulta dada
+    private static double evaluateQuery(IndexSearcher searcher, Query query, int cut, String metric) throws IOException {
         TopDocs topDocs = searcher.search(query, cut);
-        
-        // Obtener los documentos relevantes para la consulta (si están disponibles)
         ScoreDoc[] hits = topDocs.scoreDocs;
-        // Calcular la métrica de evaluación (por ejemplo, precisión P@k)
-        double precision = calculatePrecision(hits, cut);
-        return precision;
+        
+        return calculateMetric(searcher, query, hits, metric);
+    }
+    
+    private static double calculateMetric(IndexSearcher searcher, Query query, ScoreDoc[] hits, String metric) throws IOException {
+        switch (metric) {
+            case "P":
+                return calculatePrecision(searcher, query, hits);
+            // Agregar casos para otras métricas como recuperación, MRR y MAP si es necesario
+            default:
+                throw new IllegalArgumentException("Métrica no válida: " + metric);
+        }
+        
+    }
+    
+    private static double calculatePrecision(IndexSearcher searcher, Query query, ScoreDoc[] hits) throws IOException {
+        List<String> relevantDocs = getRelevantDocuments(query); // Obtener los documentos relevantes para la consulta actual
+        int relevantCount = relevantDocs.size();
+        if (relevantCount == 0) return 0.0;
+        
+        int retrievedCount = Math.min(hits.length, relevantCount);
+        int relevantRetrieved = 0;
+        for (int i = 0; i < retrievedCount; i++) {
+            @SuppressWarnings("deprecation")
+            Document doc = searcher.doc(hits[i].doc);
+            String docId = doc.get("id");
+            if (relevantDocs.contains(docId)) {
+                relevantRetrieved++;
+            }
+        }
+        return (double) relevantRetrieved / retrievedCount;
+    }
+    
+    
+    private static List<String> getRelevantDocuments(Query query) throws IOException {
+        Map<Integer, List<String>> relevantDocsMap = parseRelevants();
+        // Aquí necesitas alguna forma de mapear la consulta a un ID, dependiendo de cómo estén organizados los documentos relevantes en tu archivo de juicios de relevancia.
+        // Por ejemplo, si la consulta es una cadena de texto y los documentos relevantes se encuentran indexados por esa cadena, puedes hacer algo así:
+        String queryText = query.toString();
+        // Aquí deberías implementar tu lógica específica para mapear la consulta a un ID y obtener los documentos relevantes correspondientes
+        
+        // Suponiendo que queryText es el texto de la consulta, podemos buscar en el mapa de documentos relevantes utilizando este texto como clave
+        List<String> relevantDocuments = relevantDocsMap.getOrDefault(queryText, new ArrayList<>());
+        return relevantDocuments;
+    }
+    
+    private static void printResults(File file) throws IOException {
+        System.out.println("Results for " + file.getName() + ":");
+        List<String> lines = Files.readAllLines(file.toPath());
+        for (String line : lines) {
+            System.out.println(line);
+        }
+    }
+    
+    private static Map<Integer, List<String>> parseRelevants() throws IOException {
+        Map<Integer, List<String>> relevantDocsMap = new HashMap<>();
+    
+        try (BufferedReader br = new BufferedReader(new FileReader(testFilePath))) {
+            // Leer la primera línea que contiene los encabezados y omitirla
+            br.readLine();
+            
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] parts = line.split("\t");
+                if (parts.length != 3) {
+                    // Si la línea no tiene el formato esperado, omitirla y continuar con la siguiente
+                    continue;
+                }
+                int queryId = Integer.parseInt(parts[0]);
+                String docId = parts[1];
+                int relevanceScore = Integer.parseInt(parts[2]);
+    
+                // Agregar el documento a la lista de documentos relevantes para la consulta
+                if (relevanceScore > 0) {
+                    relevantDocsMap.computeIfAbsent(queryId, k -> new ArrayList<>()).add(docId);
+                }
+            }
+        }
+    
+        return relevantDocsMap;
     }
 
-    
     private static int tryParse(String text, String errorMessage) {
         try {
             return Integer.parseInt(text);
@@ -273,88 +354,30 @@ public class TrainingTestTrecCovid {
         return l;
     }
 
-    private static double calculatePrecision(ScoreDoc[] hits, int cut) {
-        int relevantCount = 0;
-        for (int i = 0; i < Math.min(hits.length, cut); i++) {
-            // Determina si el documento en la posición i es relevante
-            if (isRelevantDocument(hits[i], null)) {
-                relevantCount++;
+    private static Query[] parseQuery(QueryParser parser, int num1, int num2) throws IOException, ParseException {
+        List<Query> queries = new ArrayList<>();
+        
+        try (LineNumberReader reader = new LineNumberReader(new FileReader(queryFilePath))) {
+            String line;
+            ObjectMapper objectMapper = new ObjectMapper();
+            
+            while ((line = reader.readLine()) != null) {
+                // Convertir la línea JSON a un objeto JSON
+                JsonNode jsonNode = objectMapper.readTree(line);
+                
+                // Extraer el campo 'text' que contiene la consulta
+                String queryText = jsonNode.get("text").asText();
+                
+                // Parsear la consulta utilizando el QueryParser de Lucene
+                Query query = parser.parse(queryText.toLowerCase(Locale.ROOT));
+                
+                // Agregar la consulta al array de consultas
+                queries.add(query);
             }
         }
-        return (double) relevantCount / Math.min(hits.length, cut);
+        
+        // Convertir la lista de consultas a un array y devolverlo
+        return queries.toArray(new Query[0]);
     }
 
-    private static boolean isRelevantDocument(ScoreDoc hit, List<Integer> relevantDocumentIds) {
-        // Obtiene el ID del documento recuperado
-        int docId = hit.doc;
-        
-        // Comprueba si el ID del documento está en la lista de IDs de documentos relevantes
-        return relevantDocumentIds.contains(docId);
-    }
-    
-    private static void printResults(File file) throws IOException {
-        System.out.println("Results for " + file.getName() + ":");
-        List<String> lines = Files.readAllLines(file.toPath());
-        for (String line : lines) {
-            System.out.println(line);
-        }
-    }
-
-        // private static void createTrainingCSVFile(String model, int[] trainingQueries, int[] testQueries, String metric, int cut, double[] paramValues, double[] scores) {
-    //     String fileName = "TREC-COVID." + model.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv";
-    //     try (FileWriter writer = new FileWriter(fileName)) {
-    //         // Escribir encabezado
-    //         writer.write("Query,");
-    //         for (double param : paramValues) {
-    //             writer.write(param + ",");
-    //         }
-    //         writer.write("\n");
-    //         // Escribir resultados por consulta
-    //         for (int i = 0; i < trainingQueries[1] - trainingQueries[0] + 1; i++) {
-    //             writer.write((i + trainingQueries[0]) + ",");
-    //             for (double score : scores) {
-    //                 writer.write(score + ",");
-    //             }
-    //             writer.write("\n");
-    //         }
-    //         // Escribir fila de promedios
-    //         writer.write("Average,");
-    //         double total = 0;
-    //         for (double score : scores) {
-    //             total += score;
-    //         }
-    //         double average = total / scores.length;
-    //         for (int i = 0; i < paramValues.length; i++) {
-    //             writer.write(average + ",");
-    //         }
-
-    //         // Imprimir resultados por pantalla
-    //         printResults(new File(fileName));
-
-    //     } catch (IOException e) {
-    //         e.printStackTrace();
-    //     }
-        
-    // }
-    
-    // private static void createTestCSVFile(String model, int[] trainingQueries, int[] testQueries, String metric, double bestParamValue, double averageScore) {
-    //     String fileName = "TREC-COVID." + model.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + ".test.csv";
-    //     try (FileWriter writer = new FileWriter(fileName)) {
-    //         // Escribir encabezado
-    //         writer.write("Query,");
-    //         writer.write(metric + ",\n");
-    //         // Escribir resultados por consulta
-    //         for (int i = testQueries[0]; i <= testQueries[1]; i++) {
-    //             writer.write(i + ", " + averageScore + "\n");
-    //         }
-    //         // Imprimir resultados por pantalla
-    //         printResults(new File(fileName));
-            
-    //         // Escribir fila de promedio
-    //         writer.write("Average, " + averageScore + "\n");
-    //     } catch (IOException e) {
-    //         e.printStackTrace();
-    //     }
-        
-    // }
 }
