@@ -137,6 +137,7 @@ public class TrainingTestTrecCovid {
         }
     }
     
+    // Evalúa y optimiza un modelo de recuperación de información .
     private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric, double[] paramValues, String similarityType) throws IOException, ParseException {
         double bestParamValue = 0.0;
         double bestScore = Double.MIN_VALUE;
@@ -213,11 +214,13 @@ public class TrainingTestTrecCovid {
         System.out.println("Best " + similarityType + " Value: " + bestParamValue);
     }
     
+    //JM model
     private static void evaluateAndOptimizeJMModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
         double[] lambdas = {0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
         evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, lambdas, "JM");
     }
     
+    //BM25 model
     private static void evaluateAndOptimizeBM25Model(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
         double[] k1Values = {0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0};
         evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, k1Values, "BM25");    
