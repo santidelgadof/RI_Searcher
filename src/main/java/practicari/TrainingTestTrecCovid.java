@@ -21,6 +21,7 @@ import org.apache.lucene.queryparser.classic.QueryParser;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -280,14 +281,13 @@ public class TrainingTestTrecCovid {
     
     
     private static List<String> getRelevantDocuments(Query query) throws IOException {
-        Map<Integer, List<String>> relevantDocsMap = parseRelevants();
-        // Aquí necesitas alguna forma de mapear la consulta a un ID, dependiendo de cómo estén organizados los documentos relevantes en tu archivo de juicios de relevancia.
-        // Por ejemplo, si la consulta es una cadena de texto y los documentos relevantes se encuentran indexados por esa cadena, puedes hacer algo así:
-        String queryText = query.toString();
-        // Aquí deberías implementar tu lógica específica para mapear la consulta a un ID y obtener los documentos relevantes correspondientes
+        File testFile = new File(testFilePath);
+        Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
+        
         
         // Suponiendo que queryText es el texto de la consulta, podemos buscar en el mapa de documentos relevantes utilizando este texto como clave
-        List<String> relevantDocuments = relevantDocsMap.getOrDefault(queryText, new ArrayList<>());
+        List<String> relevantDocuments = relevances.getOrDefault(queryId, new ArrayList<>());
+        System.out.println("Documentos relevantes: " + relevantDocuments);
         return relevantDocuments;
     }
     
@@ -299,32 +299,28 @@ public class TrainingTestTrecCovid {
         }
     }
     
-    private static Map<Integer, List<String>> parseRelevants() throws IOException {
-        Map<Integer, List<String>> relevantDocsMap = new HashMap<>();
-    
-        try (BufferedReader br = new BufferedReader(new FileReader(testFilePath))) {
-            // Leer la primera línea que contiene los encabezados y omitirla
-            br.readLine();
-            
-            String line;
-            while ((line = br.readLine()) != null) {
-                String[] parts = line.split("\t");
-                if (parts.length != 3) {
-                    // Si la línea no tiene el formato esperado, omitirla y continuar con la siguiente
-                    continue;
-                }
-                int queryId = Integer.parseInt(parts[0]);
-                String docId = parts[1];
-                int relevanceScore = Integer.parseInt(parts[2]);
-    
-                // Agregar el documento a la lista de documentos relevantes para la consulta
-                if (relevanceScore > 0) {
-                    relevantDocsMap.computeIfAbsent(queryId, k -> new ArrayList<>()).add(docId);
-                }
+    private static Map<Integer, Map<String, Integer>> readTsv(File test) {
+        Map<Integer, Map<String, Integer>> data = new HashMap<>();
+
+        try (BufferedReader tsvReader = new BufferedReader(new FileReader(test))) {
+            String line = tsvReader.readLine();      // ignoramos la línea de cabecera
+            while ((line = tsvReader.readLine()) != null) {
+                String[] lineItems = line.split("\t");
+                int queryId = tryParse(lineItems[0], "Error en el archivo de tests de relevancia.");
+
+                Map<String, Integer> map = data.containsKey(queryId)? data.get(queryId) : new HashMap<>();
+                int relev = tryParse(lineItems[2], "Error en el archivo de tests de relevancia.");
+                map.put(lineItems[1], relev);
+                data.put(queryId, map);
             }
+        } catch (FileNotFoundException e) {
+            System.err.println("No se ha encontrado el archivo de tests de relevancia.");
+            System.exit(1);
+        } catch (IOException e) {
+            System.err.println("Excepción de E/S al leer el archivo de tests de relevancia: " + e.getMessage());
+            System.exit(1);
         }
-    
-        return relevantDocsMap;
+        return data;
     }
 
     private static int tryParse(String text, String errorMessage) {
