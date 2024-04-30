@@ -73,8 +73,8 @@ public class SearchEvalTrecCovid {
         if (cut < 1) {
             System.err.println("Opción -cut debe ser un entero positivo.");
             System.exit(1);
-        } else if (top < 1) {
-            System.err.println("Opción -top debe ser un entero positivo.");
+        } else if (top < 0) {
+            System.err.println("Opción -top debe ser 0 o un número natural.");
             System.exit(1);
         }
 
@@ -112,7 +112,7 @@ public class SearchEvalTrecCovid {
 
                 while (itr.hasNext()) {
                     query = itr.next();
-                    if (query.id() > q1 && query.id() < q2)
+                    if (query.id() >= q1 && query.id() <= q2)
                         queries.add(query);
                 }
             } else {        // si es una única query
@@ -261,6 +261,7 @@ public class SearchEvalTrecCovid {
                     + "; Mean Recall@n: " + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
             txtWriter.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
                     + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
+            csvWriter.println("," + mp + "," + meanRecall + "," + map + "," + mrr);
 
             // cerrar writers
             txtWriter.flush();
