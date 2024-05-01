@@ -32,12 +32,7 @@ import java.io.IOException;
 import java.io.LineNumberReader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 
 import org.apache.lucene.document.Document;
 
@@ -173,38 +168,145 @@ public class TrainingTestTrecCovid {
     }
 
     // Evalúa y optimiza un modelo de recuperación de información .
-    private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric, double[] paramValues, String similarityType) throws IOException, ParseException {
+    private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer,
+                                                 int[] trainingRange, int[] testRange, int cut, String metric,
+                                                 double[] paramValues, String similarityType)
+            throws IOException, ParseException {
         double bestParamValue = 0.0;
         double bestScore = Double.MIN_VALUE;
         double totalScore = 0.0;
         int totalQueries = 0;
         QueryParser parser = new QueryParser("text", analyzer);
-        Query[] trainingqueries = parseQuery(parser, trainingQueries[0], trainingQueries[1]);
-        Query[] testqueries = parseQuery(parser, testQueries[0], testQueries[1]);
+        //Query[] trainingqueries = parseQuery(parser, trainingQueries[0], trainingQueries[1]);
+        Query[] testqueries = parseQuery(parser, testRange[0], testRange[1]);
         // Leer el archivo de juicios de relevancia (test.tsv)
         File testFile = new File(testFilePath);
         Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
         
 
         // Crear archivos CSV para entrenamiento y test
-        File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
-        File testCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".test.csv");
+        File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase()
+                + ".training." + trainingRange[0] + "-" + trainingRange[1] + ".test." +
+                testRange[0] + "-" + testRange[1] + "." + metric + cut + ".training.csv");
+        File testCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() +
+                ".training." + trainingRange[0] + "-" + trainingRange[1] + ".test."
+                + testRange[0] + "-" + testRange[1] + "." + metric + cut + ".test.csv");
     
         // FileWriter para archivos CSV de entrenamiento y test
         FileWriter trainingWriter = new FileWriter(trainingCsvFile);
         FileWriter testWriter = new FileWriter(testCsvFile);
     
         // Escribir encabezados en archivos CSV de entrenamiento y test
-        trainingWriter.write("Query,");
-        testWriter.write("Query,");
+        trainingWriter.write(metric + "@" + cut);
+        // TODO: en test, la primera fila primera columna para indicar el valor del lambda en test (lamda óptimo en training),
+        //testWriter.write(metric + "@" + cut);
         for (double param : paramValues) {
             trainingWriter.write(param + ",");
         }
-        trainingWriter.write("\n");
-        testWriter.write(metric + ",\n");
-    
+        trainingWriter.write(System.lineSeparator());
+        //testWriter.write(metric + ",\n");
+
+        // leer jsonl de queries
+        File queryFile = new File(queryFilePath);
+        ObjectReader queryReader = JsonMapper.builder().findAndAddModules().build()
+                .readerFor(QueryJsonl.class);
+        List<QueryJsonl> trainingQueries = new LinkedList<>();
+        MappingIterator<QueryJsonl> itr = queryReader.readValues(queryFile);
+
+        while (itr.hasNext()) {
+            QueryJsonl query;
+            query = itr.next();
+            if (query.id() >= trainingRange[0] && query.id() <= trainingRange[1])
+                trainingQueries.add(query);
+        }
+
+        double sumP = 0;
+        double sumRecall = 0;
+        double sumAP = 0;
+        double sumRR = 0;
+        int numQueries = trainingQueries.size();
+
+        for (QueryJsonl query : trainingQueries) {
+            // TODO: analizar que todas las queries se hagan bien con el parser
+            Query q = parser.parse(query.metadata().query());
+            Map<String, Integer> thisRelevances = relevances.get(query.id());
+
+            // Ranking de documentos  al hacer una búsqueda
+            TopDocs topDocs = searcher.search(q, cut); // sacamos los top docs para las métricas
+            List<ScoreDoc> scoreDocs = List.of(topDocs.scoreDocs);
+            int relevantN = 0;
+            int relevantQuery = 0;
+            double sumAccuracies = 0;
+            int firstRelevant = 0;
+
+            for(String corpusID : thisRelevances.keySet()) {
+                // para cada doc, vemos si es relevante para esta query
+                if(thisRelevances.get(corpusID) > 0)
+                    relevantQuery++;
+            }
+
+            double p = 0;
+            double recall = 0;
+            double ap = 0;
+            int rr = 0;
+
+            if (relevantQuery == 0) {    // no tenemos en cuenta para las métricas las queries sin resultados
+                numQueries--;
+            } else {
+                int rankingPos = 0;
+                for(ScoreDoc scoreDoc : scoreDocs) {        // iteramos por el ranking
+                    rankingPos++;
+
+                    // buscamos cada documento de topDocs
+                    Document doc = searcher.doc(scoreDoc.doc);
+                    String corpusID = doc.get("id");
+                    int relevance = thisRelevances.getOrDefault(corpusID, 0);
+
+                    if(relevance > 0) {
+                        relevantN++;
+                        // calcular precision
+                        sumAccuracies += (double) relevantN / rankingPos;
+                        if(firstRelevant == 0)
+                            firstRelevant = rankingPos;
+                    }
+                }
+
+                // cálculo de métricas
+                p = (double) relevantN / cut;
+                recall = (double) relevantN / relevantQuery;
+                ap = sumAccuracies / relevantQuery;
+                rr = firstRelevant == 0? 0 : 1/firstRelevant;
+
+                // sumar para luego calcular las métricas globales
+                sumP += p;
+                sumRecall += recall;
+                sumAP += ap;
+                sumRR += rr;
+            }
+
+            // print query metrics
+            System.out.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: "+ recall
+                    + "; AP@n: " + ap + "; RR@n: " + rr + System.lineSeparator() + System.lineSeparator());
+            txtWriter.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall
+                    + "; AP@n: " + ap + "; RR@n: " + rr + System.lineSeparator() + System.lineSeparator());
+            csvWriter.println(query.id() + "," + p + "," + recall + "," + ap + "," + rr);
+        }
+
+        double mp = sumP / numQueries;
+        double meanRecall = sumRecall / numQueries;
+        double map = sumAP / numQueries;
+        double mrr = sumRR / numQueries;
+
+        System.out.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp
+                + "; Mean Recall@n: " + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
+        txtWriter.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
+                + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
+        csvWriter.println("," + mp + "," + meanRecall + "," + map + "," + mrr);
+
+// *****************************************************************************************************************************
+
         // Procesar cada consulta de entrenamiento
-        for (int i = trainingQueries[0]; i <= trainingQueries[1]; i++) {
+        for (int i = trainingRange[0]; i <= trainingRange[1]; i++) {
             Query query = trainingqueries[i - trainingQueries[0]]; // Obtener la consulta correspondiente
             trainingWriter.write(i + ",");
             double[] scores = new double[paramValues.length];
@@ -233,8 +335,8 @@ public class TrainingTestTrecCovid {
         }
     
         // Procesar cada consulta de test
-        for (int i = testQueries[0]; i <= testQueries[1]; i++) {
-            Query query = testqueries[i - testQueries[0]]; // Obtener la consulta correspondiente
+        for (int i = testRange[0]; i <= testRange[1]; i++) {
+            Query query = testqueries[i - testRange[0]]; // Obtener la consulta correspondiente
             double score = calculateScore(query, relevances.get(i), searcher, cut, metric);
             testWriter.write(i + ", " + score + "\n");
             totalScore += score;
