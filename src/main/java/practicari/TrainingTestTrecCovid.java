@@ -10,7 +10,6 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
-import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 
@@ -32,7 +31,13 @@ import java.io.IOException;
 import java.io.LineNumberReader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 import org.apache.lucene.document.Document;
 
@@ -111,7 +116,6 @@ public class TrainingTestTrecCovid {
 
         // Configurar el analizador
         Analyzer analyzer = new StandardAnalyzer();
-    
 
         try (Directory dir = FSDirectory.open(Paths.get(indexDir));
             IndexReader indexReader = DirectoryReader.open(dir)) {
@@ -159,6 +163,7 @@ public class TrainingTestTrecCovid {
     private static void evaluateAndOptimizeJMModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric) throws IOException, ParseException {
         double[] lambdas = {0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
         evaluateAndOptimizeModel(searcher, analyzer, trainingQueries, testQueries, cut, metric, lambdas, "JM");
+        System.out.println("training: " + trainingQueries);
     }
     
     //BM25 model
@@ -168,179 +173,87 @@ public class TrainingTestTrecCovid {
     }
 
     // Evalúa y optimiza un modelo de recuperación de información .
-    private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer,
-                                                 int[] trainingRange, int[] testRange, int cut, String metric,
-                                                 double[] paramValues, String similarityType)
-            throws IOException, ParseException {
+    private static void evaluateAndOptimizeModel(IndexSearcher searcher, Analyzer analyzer, int[] trainingQueries, int[] testQueries, int cut, String metric, double[] paramValues, String similarityType) throws IOException, ParseException {
         double bestParamValue = 0.0;
         double bestScore = Double.MIN_VALUE;
         double totalScore = 0.0;
         int totalQueries = 0;
         QueryParser parser = new QueryParser("text", analyzer);
-        //Query[] trainingqueries = parseQuery(parser, trainingQueries[0], trainingQueries[1]);
-        Query[] testqueries = parseQuery(parser, testRange[0], testRange[1]);
+        Query[] trainingqueries = parseQuery(parser, trainingQueries[0], trainingQueries[1]);
+        Query[] testqueries = parseQuery(parser, testQueries[0], testQueries[1]);
         // Leer el archivo de juicios de relevancia (test.tsv)
         File testFile = new File(testFilePath);
+        File queryFile = new File(queryFilePath);
         Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
+        ObjectReader queryReader = JsonMapper.builder().findAndAddModules().build()
+                    .readerFor(QueryJsonl.class);
+        List<QueryJsonl> queries = new LinkedList<>();
+        MappingIterator<QueryJsonl> itr_train = queryReader.readValues(queryFile);
+        MappingIterator<QueryJsonl> itr_test = queryReader.readValues(queryFile);
+
+        QueryJsonl query;            
+
         
 
         // Crear archivos CSV para entrenamiento y test
-        File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase()
-                + ".training." + trainingRange[0] + "-" + trainingRange[1] + ".test." +
-                testRange[0] + "-" + testRange[1] + "." + metric + cut + ".training.csv");
-        File testCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() +
-                ".training." + trainingRange[0] + "-" + trainingRange[1] + ".test."
-                + testRange[0] + "-" + testRange[1] + "." + metric + cut + ".test.csv");
+        File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
+        File testCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".test.csv");
     
         // FileWriter para archivos CSV de entrenamiento y test
         FileWriter trainingWriter = new FileWriter(trainingCsvFile);
         FileWriter testWriter = new FileWriter(testCsvFile);
     
         // Escribir encabezados en archivos CSV de entrenamiento y test
-        trainingWriter.write(metric + "@" + cut);
-        // TODO: en test, la primera fila primera columna para indicar el valor del lambda en test (lamda óptimo en training),
-        //testWriter.write(metric + "@" + cut);
+        trainingWriter.write("Query,");
+        testWriter.write("Query,");
         for (double param : paramValues) {
             trainingWriter.write(param + ",");
         }
-        trainingWriter.write(System.lineSeparator());
-        //testWriter.write(metric + ",\n");
-
-        // leer jsonl de queries
-        File queryFile = new File(queryFilePath);
-        ObjectReader queryReader = JsonMapper.builder().findAndAddModules().build()
-                .readerFor(QueryJsonl.class);
-        List<QueryJsonl> trainingQueries = new LinkedList<>();
-        MappingIterator<QueryJsonl> itr = queryReader.readValues(queryFile);
-
-        while (itr.hasNext()) {
-            QueryJsonl query;
-            query = itr.next();
-            if (query.id() >= trainingRange[0] && query.id() <= trainingRange[1])
-                trainingQueries.add(query);
-        }
-
-        double sumP = 0;
-        double sumRecall = 0;
-        double sumAP = 0;
-        double sumRR = 0;
-        int numQueries = trainingQueries.size();
-
-        for (QueryJsonl query : trainingQueries) {
-            // TODO: analizar que todas las queries se hagan bien con el parser
-            Query q = parser.parse(query.metadata().query());
-            Map<String, Integer> thisRelevances = relevances.get(query.id());
-
-            // Ranking de documentos  al hacer una búsqueda
-            TopDocs topDocs = searcher.search(q, cut); // sacamos los top docs para las métricas
-            List<ScoreDoc> scoreDocs = List.of(topDocs.scoreDocs);
-            int relevantN = 0;
-            int relevantQuery = 0;
-            double sumAccuracies = 0;
-            int firstRelevant = 0;
-
-            for(String corpusID : thisRelevances.keySet()) {
-                // para cada doc, vemos si es relevante para esta query
-                if(thisRelevances.get(corpusID) > 0)
-                    relevantQuery++;
-            }
-
-            double p = 0;
-            double recall = 0;
-            double ap = 0;
-            int rr = 0;
-
-            if (relevantQuery == 0) {    // no tenemos en cuenta para las métricas las queries sin resultados
-                numQueries--;
-            } else {
-                int rankingPos = 0;
-                for(ScoreDoc scoreDoc : scoreDocs) {        // iteramos por el ranking
-                    rankingPos++;
-
-                    // buscamos cada documento de topDocs
-                    Document doc = searcher.doc(scoreDoc.doc);
-                    String corpusID = doc.get("id");
-                    int relevance = thisRelevances.getOrDefault(corpusID, 0);
-
-                    if(relevance > 0) {
-                        relevantN++;
-                        // calcular precision
-                        sumAccuracies += (double) relevantN / rankingPos;
-                        if(firstRelevant == 0)
-                            firstRelevant = rankingPos;
+        trainingWriter.write("\n");
+        testWriter.write(metric + ",\n");
+    
+        // Procesar cada consulta de entrenamiento
+        while (itr_train.hasNext()) {
+            query = itr_train.next();
+            if (query.id() >= trainingQueries[0] && query.id() <= trainingQueries[1]) {
+                queries.add(query);
+                trainingWriter.write(query.id() + ",");
+                double[] scores = new double[paramValues.length];
+                for (int j = 0; j < paramValues.length; j++) {
+                    if (similarityType.equals("JM")) {
+                        searcher.setSimilarity(new LMJelinekMercerSimilarity((float) paramValues[j]));
+                    } else if (similarityType.equals("BM25")) {
+                        BM25Similarity similarity = new BM25Similarity((float) paramValues[j], 0.75F);
+                        searcher.setSimilarity(similarity);
+                    }
+                    double score = calculateScore(query, relevances.get(query.id()), searcher, cut, metric, parser);
+                    scores[j] = score;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestParamValue = paramValues[j];
                     }
                 }
-
-                // cálculo de métricas
-                p = (double) relevantN / cut;
-                recall = (double) relevantN / relevantQuery;
-                ap = sumAccuracies / relevantQuery;
-                rr = firstRelevant == 0? 0 : 1/firstRelevant;
-
-                // sumar para luego calcular las métricas globales
-                sumP += p;
-                sumRecall += recall;
-                sumAP += ap;
-                sumRR += rr;
+                for (double score : scores) {
+                    try {
+                        trainingWriter.write(score + ",");
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+                trainingWriter.write("\n");
             }
-
-            // print query metrics
-            System.out.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: "+ recall
-                    + "; AP@n: " + ap + "; RR@n: " + rr + System.lineSeparator() + System.lineSeparator());
-            txtWriter.print("QUERY METRICS:" + System.lineSeparator() + "P@N: " + p + "; Recall@n: " + recall
-                    + "; AP@n: " + ap + "; RR@n: " + rr + System.lineSeparator() + System.lineSeparator());
-            csvWriter.println(query.id() + "," + p + "," + recall + "," + ap + "," + rr);
         }
-
-        double mp = sumP / numQueries;
-        double meanRecall = sumRecall / numQueries;
-        double map = sumAP / numQueries;
-        double mrr = sumRR / numQueries;
-
-        System.out.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp
-                + "; Mean Recall@n: " + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
-        txtWriter.println("GLOBAL METRICS:" + System.lineSeparator() + "Mean P@N: " + mp + "; Mean Recall@n: "
-                + meanRecall + "; MAP@n: " + map + "; MRR@n: " + mrr);
-        csvWriter.println("," + mp + "," + meanRecall + "," + map + "," + mrr);
-
-// *****************************************************************************************************************************
-
-        // Procesar cada consulta de entrenamiento
-        for (int i = trainingRange[0]; i <= trainingRange[1]; i++) {
-            Query query = trainingqueries[i - trainingQueries[0]]; // Obtener la consulta correspondiente
-            trainingWriter.write(i + ",");
-            double[] scores = new double[paramValues.length];
-            for (int j = 0; j < paramValues.length; j++) {
-                if (similarityType.equals("JM")) {
-                    searcher.setSimilarity(new LMJelinekMercerSimilarity((float) paramValues[j]));
-                } else if (similarityType.equals("BM25")) {
-                    BM25Similarity similarity = new BM25Similarity((float) paramValues[j], 0.75F);
-                    searcher.setSimilarity(similarity);
-                }
-                double score = calculateScore(query, relevances.get(i), searcher, cut, metric);
-                scores[j] = score;
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestParamValue = paramValues[j];
-                }
-            }
-            Arrays.stream(scores).forEach(score -> {
-                try {
-                    trainingWriter.write(score + ",");
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            });
-            trainingWriter.write("\n");
-        }
-    
         // Procesar cada consulta de test
-        for (int i = testRange[0]; i <= testRange[1]; i++) {
-            Query query = testqueries[i - testRange[0]]; // Obtener la consulta correspondiente
-            double score = calculateScore(query, relevances.get(i), searcher, cut, metric);
-            testWriter.write(i + ", " + score + "\n");
-            totalScore += score;
-            totalQueries++;
+        while (itr_test.hasNext()) {
+            query = itr_test.next();
+            if (query.id() >= testQueries[0] && query.id() <= testQueries[1]) {
+                queries.add(query);
+            
+                double score = calculateScore(query, relevances.get(query.id()), searcher, cut, metric, parser);
+                testWriter.write(query.id() + ", " + score + "\n");
+                totalScore += score;
+                totalQueries++;
+            }    
         }
     
         // Escribir promedio en archivo CSV de test
@@ -356,21 +269,28 @@ public class TrainingTestTrecCovid {
         printResults(testCsvFile);
     
         System.out.println("Best " + similarityType + " Value: " + bestParamValue);
-    }
+    } 
     
-    public static double calculateScore(Query query, Map<String, Integer> relevanceJudgments, IndexSearcher searcher, int cut, String metric) throws IOException {
     
-
+    public static double calculateScore(QueryJsonl query, Map<String, Integer> relevanceJudgments, IndexSearcher searcher, int cut, String metric, QueryParser parser  ) throws IOException {
+    
+        Query q=null;
+        try {
+            q = parser.parse(query.metadata().query());
+        } catch (ParseException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
         // Ranking de documentos al hacer una búsqueda
-        TopDocs topDocs = searcher.search(query, cut);
+        TopDocs topDocs = searcher.search(q, cut);
         List<ScoreDoc> retrievedDocs = Arrays.asList(topDocs.scoreDocs);
         
         // Imprimir los argumentos recibidos
-        System.out.println("Query: " + query );
-        System.out.println(" \n"  );
-        System.out.println("Relevance Judgments: " + relevanceJudgments);
-        System.out.println(" \n"  );
-        System.out.println("RetrievedDocs: " + retrievedDocs);
+        //System.out.println("Query: " + query );
+        //System.out.println(" \n"  );
+        //System.out.println("Relevance Judgments: " + relevanceJudgments);
+        //System.out.println(" \n"  );
+        //System.out.println("RetrievedDocs: " + retrievedDocs);
 
 
 
@@ -401,7 +321,7 @@ public class TrainingTestTrecCovid {
                 System.out.println("Métrica no válida");
                 break;
         }
-
+        //System.out.println("Score: " + score);
         return score;
     }
 
@@ -424,13 +344,13 @@ public class TrainingTestTrecCovid {
             // Verificar si el documento es relevante y está presente en relevanceJudgments
             if (relevanceJudgments.containsKey(docId) && relevanceJudgments.get(docId) > 0) {
                 relevantRetrieved++;
-                System.out.println("Documento relevante encontrado: " + docId);
+                //System.out.println("Documento relevante encontrado: " + docId);
             } else {
-                System.out.println("Documento no relevante: " + docId);
+                //System.out.println("Documento no relevante: " + docId);
             }
         }
         double precision = (double) relevantRetrieved / retrieved;
-        System.out.println("Precision calculada: " + precision);
+        //System.out.println("Precision calculada: " + precision);
         return precision;
     }
     
