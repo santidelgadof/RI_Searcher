@@ -10,11 +10,15 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
+import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.MappingIterator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
@@ -50,15 +54,17 @@ public class TrainingTestTrecCovid {
             "-cut <n>: n indica el corte en el ranking para el cómputo de la métrica.\n" +
             "-metrica P | R | MRR | MAP: indica la métrica computada y optimizada en el corte n.\n" +
             "-index <ruta>: ruta de la carpeta que contiene el índice.\n";
+            
     public static void main(String[] args) {
         
         boolean evaljm = false, evalbm25 = false;
-        int cut = 0;
+        int cut = 10;
         String evalOption = null;
         String indexDir = null;
         int[] trainingQueries = new int[2];
         int[] testQueries = new int[2];
         String metric = null;
+
 
         for (int i = 0; i < args.length; i++) {
             System.out.println("Argumento actual: " + args[i]); 
@@ -80,8 +86,9 @@ public class TrainingTestTrecCovid {
                     String[] evalArgsBM25 = args[++i].split("-");
                     trainingQueries[0] = Integer.parseInt(evalArgsBM25[0]);
                     trainingQueries[1] = Integer.parseInt(evalArgsBM25[1]);
-                    testQueries[0] = Integer.parseInt(evalArgsBM25[2]);
-                    testQueries[1] = Integer.parseInt(evalArgsBM25[3]);
+                    evalArgsBM25 = args[++i].split("-");
+                    testQueries[0] = Integer.parseInt(evalArgsBM25[0]);
+                    testQueries[1] = Integer.parseInt(evalArgsBM25[1]);
                     break;
                 case "-cut":
                     cut = tryParse(args[++i], "Parámetro \"cut\" no es un entero válido");  
@@ -109,8 +116,8 @@ public class TrainingTestTrecCovid {
 
         // Configurar el analizador
         Analyzer analyzer = new StandardAnalyzer();
+    
 
-        // Abrir el índice
         try (Directory dir = FSDirectory.open(Paths.get(indexDir));
             IndexReader indexReader = DirectoryReader.open(dir)) {
 
@@ -124,11 +131,13 @@ public class TrainingTestTrecCovid {
                 evaluateAndOptimizeBM25Model(searcher, analyzer, trainingQueries, testQueries, cut, metric);
             }
 
-        } catch (IOException | ParseException e) {
-            throw new RuntimeException(e);
+        } catch (IOException e) {
+            System.err.println("Excepción de E/S: " + e.getMessage());
+        } catch (ParseException e) {
+            System.err.println("Error de parsing: " + e.getMessage());
         }
-
     }
+
 
     private static void validateParams(boolean evaljm, boolean evalbm25, int cut, String metrica, String indexPath) {
         if (evaljm && evalbm25) {
@@ -169,10 +178,14 @@ public class TrainingTestTrecCovid {
         double bestScore = Double.MIN_VALUE;
         double totalScore = 0.0;
         int totalQueries = 0;
-        QueryParser parser = new QueryParser("Contents", new StandardAnalyzer());
+        QueryParser parser = new QueryParser("text", analyzer);
         Query[] trainingqueries = parseQuery(parser, trainingQueries[0], trainingQueries[1]);
         Query[] testqueries = parseQuery(parser, testQueries[0], testQueries[1]);
-    
+        // Leer el archivo de juicios de relevancia (test.tsv)
+        File testFile = new File(testFilePath);
+        Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
+        
+
         // Crear archivos CSV para entrenamiento y test
         File trainingCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".training.csv");
         File testCsvFile = new File("TREC-COVID." + similarityType.toLowerCase() + ".training." + trainingQueries[0] + "-" + trainingQueries[1] + ".test." + testQueries[0] + "-" + testQueries[1] + "." + metric + cut + ".test.csv");
@@ -202,7 +215,7 @@ public class TrainingTestTrecCovid {
                     BM25Similarity similarity = new BM25Similarity((float) paramValues[j], 0.75F);
                     searcher.setSimilarity(similarity);
                 }
-                double score = evaluateQuery(searcher, query, cut, metric); // Pasar la consulta correcta
+                double score = calculateScore(query, relevances.get(i), searcher, cut, metric);
                 scores[j] = score;
                 if (score > bestScore) {
                     bestScore = score;
@@ -222,7 +235,7 @@ public class TrainingTestTrecCovid {
         // Procesar cada consulta de test
         for (int i = testQueries[0]; i <= testQueries[1]; i++) {
             Query query = testqueries[i - testQueries[0]]; // Obtener la consulta correspondiente
-            double score = evaluateQuery(searcher, query, cut, metric); // Pasar la consulta correcta
+            double score = calculateScore(query, relevances.get(i), searcher, cut, metric);
             testWriter.write(i + ", " + score + "\n");
             totalScore += score;
             totalQueries++;
@@ -243,54 +256,124 @@ public class TrainingTestTrecCovid {
         System.out.println("Best " + similarityType + " Value: " + bestParamValue);
     }
     
-    private static double evaluateQuery(IndexSearcher searcher, Query query, int cut, String metric) throws IOException {
+    public static double calculateScore(Query query, Map<String, Integer> relevanceJudgments, IndexSearcher searcher, int cut, String metric) throws IOException {
+    
+
+        // Ranking de documentos al hacer una búsqueda
         TopDocs topDocs = searcher.search(query, cut);
-        ScoreDoc[] hits = topDocs.scoreDocs;
+        List<ScoreDoc> retrievedDocs = Arrays.asList(topDocs.scoreDocs);
         
-        return calculateMetric(searcher, query, hits, metric);
-    }
-    
-    private static double calculateMetric(IndexSearcher searcher, Query query, ScoreDoc[] hits, String metric) throws IOException {
-        switch (metric) {
-            case "P":
-                return calculatePrecision(searcher, query, hits);
-            // Agregar casos para otras métricas como recuperación, MRR y MAP si es necesario
-            default:
-                throw new IllegalArgumentException("Métrica no válida: " + metric);
+        // Imprimir los argumentos recibidos
+        System.out.println("Query: " + query );
+        System.out.println(" \n"  );
+        System.out.println("Relevance Judgments: " + relevanceJudgments);
+        System.out.println(" \n"  );
+        System.out.println("RetrievedDocs: " + retrievedDocs);
+
+
+
+        // Calcular el número total de documentos relevantes para esta consulta
+        int totalRelevantDocs = 0;
+        for (Map.Entry<String, Integer> entry : relevanceJudgments.entrySet()) {
+            if (entry.getValue() > 0) {
+                totalRelevantDocs++;
+            }
         }
-        
+
+        // Calcular el puntaje según la métrica especificada
+        double score = 0.0;
+        switch(metric) {
+            case "P":
+                score = calculatePrecision(retrievedDocs, relevanceJudgments, cut, searcher);
+                break;
+            case "R":
+                score = calculateRecall(retrievedDocs, relevanceJudgments, totalRelevantDocs, searcher);
+                break;
+            case "MRR":
+                score = calculateMRR(retrievedDocs, relevanceJudgments, searcher);
+                break;
+            case "MAP":
+                score = calculateMAP(retrievedDocs, relevanceJudgments, searcher);
+                break;
+            default:
+                System.out.println("Métrica no válida");
+                break;
+        }
+
+        return score;
+    }
+
+
+
+    private static double calculatePrecision(List<ScoreDoc> retrievedDocs, Map<String, Integer> relevanceJudgments, int cut, IndexSearcher searcher) throws IOException {
+        int relevantRetrieved = 0;
+        int retrieved = Math.min(cut, retrievedDocs.size()); // Limitamos a la cantidad de documentos en el corte
+    
+        // Verificar si retrievedDocs no está vacío
+        if (retrievedDocs.isEmpty()) {
+            System.out.println("No se han recuperado documentos.");
+            return 0.0;
+        }
+    
+        for (int i = 0; i < retrieved; i++) {
+            ScoreDoc scoreDoc = retrievedDocs.get(i);
+            Document doc = searcher.doc(scoreDoc.doc);
+            String docId = doc.get("id");
+            // Verificar si el documento es relevante y está presente en relevanceJudgments
+            if (relevanceJudgments.containsKey(docId) && relevanceJudgments.get(docId) > 0) {
+                relevantRetrieved++;
+                System.out.println("Documento relevante encontrado: " + docId);
+            } else {
+                System.out.println("Documento no relevante: " + docId);
+            }
+        }
+        double precision = (double) relevantRetrieved / retrieved;
+        System.out.println("Precision calculada: " + precision);
+        return precision;
     }
     
-    private static double calculatePrecision(IndexSearcher searcher, Query query, ScoreDoc[] hits) throws IOException {
-        Map<String, Integer> relevantDocs = getRelevantDocuments(query, ); // Obtener los documentos relevantes para la consulta actual
-        int relevantCount = relevantDocs.size();
-        if (relevantCount == 0) return 0.0;
-        
-        int retrievedCount = Math.min(hits.length, relevantCount);
+
+    
+    private static double calculateRecall(List<ScoreDoc> retrievedDocs, Map<String, Integer> relevanceJudgments, int totalRelevantDocs, IndexSearcher searcher) throws IOException {
         int relevantRetrieved = 0;
-        for (int i = 0; i < retrievedCount; i++) {
-            @SuppressWarnings("deprecation")
-            Document doc = searcher.doc(hits[i].doc);
+        for (ScoreDoc scoreDoc : retrievedDocs) {
+            Document doc = searcher.doc(scoreDoc.doc);
             String docId = doc.get("id");
-            if (relevantDocs.containsKey(docId)) {
+            if (relevanceJudgments.containsKey(docId) && relevanceJudgments.get(docId) > 0) {
                 relevantRetrieved++;
             }
         }
-        return (double) relevantRetrieved / retrievedCount;
+        return (double) relevantRetrieved / totalRelevantDocs;
+    }
+
+    private static double calculateMRR(List<ScoreDoc> retrievedDocs, Map<String, Integer> relevanceJudgments, IndexSearcher searcher) throws IOException {
+        for (int i = 0; i < retrievedDocs.size(); i++) {
+            ScoreDoc scoreDoc = retrievedDocs.get(i);
+            Document doc = searcher.doc(scoreDoc.doc);
+            String docId = doc.get("id");
+            if (relevanceJudgments.containsKey(docId) && relevanceJudgments.get(docId) > 0) {
+                return 1.0 / (i + 1); // Reciprocal rank
+            }
+        }
+        return 0.0; // No se encontraron documentos relevantes
+    }
+
+    private static double calculateMAP(List<ScoreDoc> retrievedDocs, Map<String, Integer> relevanceJudgments, IndexSearcher searcher) throws IOException {
+        double sumPrecision = 0.0;
+        int relevantRetrieved = 0;
+        for (int i = 0; i < retrievedDocs.size(); i++) {
+            ScoreDoc scoreDoc = retrievedDocs.get(i);
+            Document doc = searcher.doc(scoreDoc.doc);
+            String docId = doc.get("id");
+            if (relevanceJudgments.containsKey(docId) && relevanceJudgments.get(docId) > 0) {
+                relevantRetrieved++;
+                sumPrecision += (double) relevantRetrieved / (i + 1); // Precision at this position
+            }
+        }
+        return sumPrecision / Math.min(relevanceJudgments.size(), retrievedDocs.size());
     }
     
-    
-    private static Map<String, Integer> getRelevantDocuments(Query query, int queryId) throws IOException {
-        File testFile = new File(testFilePath);
-        Map<Integer, Map<String, Integer>> relevances = readTsv(testFile);
-        
-        // Suponiendo que queryText es el texto de la consulta, podemos buscar en el mapa de documentos relevantes utilizando este texto como clave
-        Map<String, Integer> relevantDocuments = relevances.getOrDefault(queryId, new HashMap<>());
-        System.out.println("Documentos relevantes para la consulta " + queryId + ": " + relevantDocuments);
-        return relevantDocuments;
-    }
-    
-    
+
     private static void printResults(File file) throws IOException {
         System.out.println("Results for " + file.getName() + ":");
         List<String> lines = Files.readAllLines(file.toPath());
