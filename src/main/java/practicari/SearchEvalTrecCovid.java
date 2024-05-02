@@ -197,6 +197,7 @@ public class SearchEvalTrecCovid {
                             break;
 
                         // buscamos cada documento de los primeros m topDocs e imprimimos su info
+                        // TODO: fix deprecated
                         Document doc = searcher.doc(scoreDoc.doc);
                         String print = getStringIndexedData(doc, scoreDoc, thisRelevances.get(doc.get("id")));
                         System.out.print(print);
@@ -212,7 +213,7 @@ public class SearchEvalTrecCovid {
                         String corpusID = doc.get("id");
                         int relevance = thisRelevances.getOrDefault(corpusID, 0);
 
-                        if (rankingPos <= cut) {        // si estamos en el corte n calculammos las métricas
+                        if (rankingPos <= cut) {        // si estamos en el corte n calculamos las métricas
                             if(relevance > 0) {
                                 relevantN++;
                                 // calcular precision
