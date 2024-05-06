@@ -115,7 +115,8 @@ public class SearchEvalTrecCovid {
                     if (query.id() >= q1 && query.id() <= q2)
                         queries.add(query);
                 }
-            } else {        // si es una única query
+            } else {
+                // si es una única query
                 int q = tryParseInt(queriesOption, "Argumento -queries no válido.");
                 QueryJsonl query;
 
@@ -128,7 +129,7 @@ public class SearchEvalTrecCovid {
                 }
 
                 if(queries.isEmpty()) {
-                    System.out.println("La query especificada no existe.");
+                    System.err.println("La query especificada no existe.");
                     System.exit(1);
                 }
             }
@@ -162,7 +163,7 @@ public class SearchEvalTrecCovid {
             for (QueryJsonl query : queries) {
                 System.out.println("Query: " + query.metadata().query());
                 txtWriter.println("Query: " + query.metadata().query());
-                // TODO: analizar que todas las queries se hagan bien con el parser
+
                 Query q = queryParser.parse(query.metadata().query());
                 Map<String, Integer> thisRelevances = relevances.get(query.id());
 
@@ -197,7 +198,6 @@ public class SearchEvalTrecCovid {
                             break;
 
                         // buscamos cada documento de los primeros m topDocs e imprimimos su info
-                        // TODO: fix deprecated
                         Document doc = searcher.doc(scoreDoc.doc);
                         String print = getStringIndexedData(doc, scoreDoc, thisRelevances.get(doc.get("id")));
                         System.out.print(print);
@@ -276,6 +276,7 @@ public class SearchEvalTrecCovid {
         }
     }
 
+    // Función para obtener la información de un documento indexado
     private static String getStringIndexedData(Document doc, ScoreDoc score, Integer relevance) {
         String str = "ID: " + doc.get("id") + System.lineSeparator();
         str += "Title: " + doc.get("title") + System.lineSeparator();

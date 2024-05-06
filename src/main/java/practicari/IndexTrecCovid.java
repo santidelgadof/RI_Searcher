@@ -1,5 +1,4 @@
 package practicari;
-//-openmode create -index index -docs trec-covid -indexingmodel bm25 1.2
 
 import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -98,9 +97,8 @@ public class IndexTrecCovid {
         }
 
         // Abrir el índice
-        Directory dir = null;
         try {
-            dir = FSDirectory.open(Paths.get(indexPath));
+            Directory dir = FSDirectory.open(Paths.get(indexPath));
             IndexWriter writer = new IndexWriter(dir, iwc);
 
             // Parsear y indexar documentos
